@@ -23,8 +23,13 @@ from kairos.models.signal_event import SignalEvent
 console = Console()
 
 _COINGECKO = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
-_REDDIT = "https://www.reddit.com/r/Bitcoin/search.json"
-_HEADERS = {"User-Agent": "kairos/0.1.0"}
+# /new.json is a listing endpoint — still works without auth unlike /search.json
+_REDDIT_NEW = "https://www.reddit.com/r/Bitcoin/new.json"
+_REDDIT_HOT = "https://www.reddit.com/r/CryptoCurrency/hot.json"
+# Reddit requires a descriptive UA; generic ones get 403
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; kairos-signal-engine/0.1; +https://github.com/kairos)"}
+
+_REDDIT_FALLBACK = [10, 10, 10]  # neutral counts when Reddit is unavailable
 
 
 async def _fetch_prices(client: httpx.AsyncClient, days: int = 30) -> tuple[list[float], float]:
@@ -38,29 +43,36 @@ async def _fetch_prices(client: httpx.AsyncClient, days: int = 30) -> tuple[list
     return prices, prices[-1]
 
 
-async def _fetch_reddit_counts(client: httpx.AsyncClient) -> list[int]:
-    resp = await client.get(
-        _REDDIT,
-        params={"q": "bitcoin", "sort": "new", "limit": 100, "t": "week"},
-        headers=_HEADERS,
-    )
-    resp.raise_for_status()
-    posts = resp.json()["data"]["children"]
-    daily: dict[str, int] = defaultdict(int)
-    for p in posts:
-        ts = p["data"].get("created_utc", 0)
-        day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-        daily[day] += 1
-    counts = [v for _, v in sorted(daily.items())]
-    return counts if counts else [10, 10, 10]
+async def _fetch_reddit_counts(client: httpx.AsyncClient) -> tuple[list[int], bool]:
+    """Returns (daily_counts, reddit_available). Falls back to neutral on any error."""
+    for url in [_REDDIT_NEW, _REDDIT_HOT]:
+        try:
+            resp = await client.get(url, params={"limit": 100}, headers=_HEADERS)
+            resp.raise_for_status()
+            posts = resp.json()["data"]["children"]
+            daily: dict[str, int] = defaultdict(int)
+            for p in posts:
+                ts = p["data"].get("created_utc", 0)
+                day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                daily[day] += 1
+            counts = [v for _, v in sorted(daily.items())]
+            return (counts if counts else _REDDIT_FALLBACK), True
+        except (httpx.HTTPStatusError, httpx.RequestError, KeyError):
+            continue
+    return _REDDIT_FALLBACK, False
 
 
-async def fetch_live_data() -> tuple[list[float], float, list[int]]:
-    """Fetch BTC prices and Reddit chatter concurrently. No API keys needed."""
+async def fetch_live_data() -> tuple[list[float], float, list[int], bool]:
+    """Fetch BTC prices and Reddit chatter concurrently. No API keys needed.
+
+    Returns: (prices, current_price, reddit_counts, reddit_available)
+    """
     async with httpx.AsyncClient(timeout=20.0) as client:
-        prices, current_price = await _fetch_prices(client)
-        reddit_counts = await _fetch_reddit_counts(client)
-    return prices, current_price, reddit_counts
+        prices_task = asyncio.create_task(_fetch_prices(client))
+        reddit_task = asyncio.create_task(_fetch_reddit_counts(client))
+        prices, current_price = await prices_task
+        reddit_counts, reddit_ok = await reddit_task
+    return prices, current_price, reddit_counts, reddit_ok
 
 
 def run_pipeline(prices: list[float], reddit_counts: list[int]) -> SignalEvent:
@@ -120,7 +132,7 @@ def run_pipeline(prices: list[float], reddit_counts: list[int]) -> SignalEvent:
     return ensemble.predict("BTC", fv, citations=causal["citations"], regime=regime)
 
 
-def display_signal(event: SignalEvent, current_price: float) -> None:
+def display_signal(event: SignalEvent, current_price: float, reddit_available: bool = True) -> None:
     """Print a simple, human-readable signal panel."""
     bullish = event.direction == "bullish"
     color = "green" if bullish else "red"
@@ -182,6 +194,9 @@ def display_signal(event: SignalEvent, current_price: float) -> None:
 
     if conf_pct < 55:
         t.append(f"\n  ⚠  Low confidence — market signal is weak, be careful\n", style="yellow")
+
+    if not reddit_available:
+        t.append(f"\n  ℹ  Reddit unavailable — signal based on price data only\n", style="dim")
 
     t.append(f"\n", style="")
 

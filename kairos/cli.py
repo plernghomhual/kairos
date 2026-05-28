@@ -32,10 +32,11 @@ def run(
     def _once() -> None:
         console.print("[dim]Fetching live data from CoinGecko + Reddit...[/dim]")
         try:
-            prices, current_price, reddit_counts = asyncio.run(fetch_live_data())
-            console.print(f"[dim]Got {len(prices)} price candles, {sum(reddit_counts)} Reddit posts[/dim]\n")
+            prices, current_price, reddit_counts, reddit_ok = asyncio.run(fetch_live_data())
+            reddit_note = f"{sum(reddit_counts)} Reddit posts" if reddit_ok else "Reddit unavailable"
+            console.print(f"[dim]Got {len(prices)} price candles, {reddit_note}[/dim]\n")
             event = run_pipeline(prices, reddit_counts)
-            display_signal(event, current_price)
+            display_signal(event, current_price, reddit_available=reddit_ok)
         except Exception as e:
             console.print(f"[red bold]Error:[/red bold] {e}")
             console.print("[dim]Check your internet connection, or CoinGecko may be rate-limiting.[/dim]")

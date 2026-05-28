@@ -113,9 +113,45 @@ async def test_fetch_live_data_returns_prices_and_counts():
         instance.__aexit__ = AsyncMock(return_value=False)
         MockClient.return_value = instance
 
-        prices, current_price, counts = await fetch_live_data()
+        prices, current_price, counts, reddit_ok = await fetch_live_data()
 
     assert len(prices) == 31
     assert current_price == prices[-1]
     assert isinstance(counts, list)
     assert all(isinstance(c, int) for c in counts)
+    assert reddit_ok is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_data_reddit_fallback_on_403():
+    from kairos.live import fetch_live_data
+    import httpx
+
+    mock_coingecko = {
+        "prices": [[i * 86400000, 50000.0 + i * 10] for i in range(31)]
+    }
+
+    mock_response_cg = MagicMock()
+    mock_response_cg.raise_for_status = MagicMock()
+    mock_response_cg.json.return_value = mock_coingecko
+
+    def raise_403(url="", **kwargs):
+        raise httpx.HTTPStatusError("403", request=MagicMock(), response=MagicMock())
+
+    async def mock_get(url, **kwargs):
+        if "coingecko" in url:
+            return mock_response_cg
+        raise httpx.HTTPStatusError("403", request=MagicMock(), response=MagicMock())
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get.side_effect = mock_get
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+
+        prices, current_price, counts, reddit_ok = await fetch_live_data()
+
+    assert len(prices) == 31
+    assert reddit_ok is False
+    assert counts == [10, 10, 10]  # neutral fallback
