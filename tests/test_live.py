@@ -148,6 +148,65 @@ def test_display_signal_low_confidence_no_crash():
     display_signal(event, current_price=50000.0, fng_score=50, fng_available=True)
 
 
+# ── _price_context + divergence penalty ───────────────────────────────────────
+
+def test_price_context_keys():
+    from kairos.live import _price_context
+    ctx = _price_context(_prices(n=200))
+    assert "ema_50" in ctx and "ema_200" in ctx
+    assert "vs_ema200" in ctx
+    assert ctx["extended_above"] in (True, False)
+    assert ctx["extended_below"] in (True, False)
+
+
+def test_price_context_not_both_extended():
+    from kairos.live import _price_context
+    ctx = _price_context(_prices(n=200))
+    assert not (ctx["extended_above"] and ctx["extended_below"])
+
+
+def test_divergence_penalty_fires_on_stretched_bullish():
+    from kairos.live import _apply_divergence_penalty
+    ctx = {"vs_ema200": 1.35, "extended_above": True, "extended_below": False}
+    conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=20)
+    assert diverged is True
+    assert conf < 0.75
+
+
+def test_divergence_penalty_no_fire_when_not_extended():
+    from kairos.live import _apply_divergence_penalty
+    ctx = {"vs_ema200": 1.05, "extended_above": False, "extended_below": False}
+    conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=20)
+    assert diverged is False
+    assert conf == 0.75
+
+
+def test_divergence_penalty_no_fire_when_fng_neutral():
+    from kairos.live import _apply_divergence_penalty
+    # Extended price but F&G is not in fear zone → no tension → no penalty
+    ctx = {"vs_ema200": 1.40, "extended_above": True, "extended_below": False}
+    conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=55)
+    assert diverged is False
+    assert conf == 0.75
+
+
+def test_divergence_penalty_never_below_60_pct_of_original():
+    from kairos.live import _apply_divergence_penalty
+    ctx = {"vs_ema200": 2.50, "extended_above": True, "extended_below": False}
+    original = 0.80
+    conf, diverged = _apply_divergence_penalty(original, "bullish", ctx, fng_score=10)
+    assert conf >= original * 0.60
+
+
+def test_run_pipeline_with_context_returns_tuple():
+    from kairos.live import run_pipeline_with_context
+    result = run_pipeline_with_context(_prices(n=200), fng_scores=_fng(n=200))
+    assert isinstance(result, tuple) and len(result) == 2
+    event, ctx = result
+    assert isinstance(event, SignalEvent)
+    assert "divergence_applied" in ctx
+
+
 # ── fetch_live_data (mocked HTTP) ──────────────────────────────────────────────
 
 @pytest.mark.asyncio

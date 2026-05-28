@@ -81,6 +81,63 @@ def _fng_narrative(fng_scores: list[int]) -> dict:
     }
 
 
+def _compute_ema(prices: np.ndarray, period: int) -> np.ndarray:
+    k = 2.0 / (period + 1)
+    ema = np.zeros(len(prices))
+    ema[0] = prices[0]
+    for i in range(1, len(prices)):
+        ema[i] = prices[i] * k + ema[i - 1] * (1 - k)
+    return ema
+
+
+def _price_context(prices: list[float]) -> dict:
+    """Where does current price sit relative to its own trend?"""
+    arr = np.array(prices, dtype=float)
+    ema50 = float(_compute_ema(arr, 50)[-1]) if len(arr) >= 50 else float(arr.mean())
+    ema200 = float(_compute_ema(arr, 200)[-1]) if len(arr) >= 200 else float(arr.mean())
+    current = arr[-1]
+    vs_ema200 = current / ema200  # 1.0 = at trend, 1.3 = 30% above
+    vs_ema50 = current / ema50
+    return {
+        "ema_50": round(ema50, 2),
+        "ema_200": round(ema200, 2),
+        "vs_ema200": round(vs_ema200, 3),
+        "vs_ema50": round(vs_ema50, 3),
+        "extended_above": vs_ema200 > 1.15,   # >15% above long-term trend
+        "extended_below": vs_ema200 < 0.85,   # >15% below long-term trend
+    }
+
+
+def _apply_divergence_penalty(
+    confidence: float,
+    direction: str,
+    ctx: dict,
+    fng_score: int,
+) -> tuple[float, bool]:
+    """
+    Cut confidence when price structure and sentiment are telling opposite stories.
+
+    Bullish signal + extreme fear + price far above trend:
+      Extreme fear usually happens at price LOWS (capitulation). When fear is
+      extreme but price is already stretched above its 200-day average, the fear
+      is likely about something else — and the "buy the fear" logic is weaker.
+
+    Bearish signal + extreme greed + price far below trend:
+      Same logic inverted.
+    """
+    if direction == "bullish" and fng_score <= 30 and ctx["extended_above"]:
+        stretch = ctx["vs_ema200"] - 1.0          # e.g. 0.35 for 35% above EMA200
+        penalty = max(0.60, 1.0 - stretch * 0.5)  # cap: never below 60% of original
+        return round(confidence * penalty, 4), True
+
+    if direction == "bearish" and fng_score >= 70 and ctx["extended_below"]:
+        stretch = 1.0 - ctx["vs_ema200"]
+        penalty = max(0.60, 1.0 - stretch * 0.5)
+        return round(confidence * penalty, 4), True
+
+    return confidence, False
+
+
 def _fng_label(score: int) -> str:
     if score >= 75: return "Extreme Greed"
     if score >= 55: return "Greed"
@@ -207,11 +264,26 @@ def run_pipeline(prices: list[float], fng_scores: list[int]) -> SignalEvent:
     return ensemble.predict("BTC", fv, citations=causal["citations"], regime=regime)
 
 
+def run_pipeline_with_context(
+    prices: list[float], fng_scores: list[int]
+) -> tuple[SignalEvent, dict]:
+    """Same as run_pipeline() but also returns price context (EMA, divergence)."""
+    event = run_pipeline(prices, fng_scores)
+    ctx = _price_context(prices)
+    adjusted_conf, diverged = _apply_divergence_penalty(
+        event.confidence, event.direction, ctx, fng_scores[-1] if fng_scores else 50
+    )
+    event.confidence = adjusted_conf
+    ctx["divergence_applied"] = diverged
+    return event, ctx
+
+
 def display_signal(
     event: SignalEvent,
     current_price: float,
     fng_score: int = 50,
     fng_available: bool = True,
+    price_context: dict | None = None,
 ) -> None:
     """Print a simple, human-readable signal panel."""
     bullish = event.direction == "bullish"
@@ -280,6 +352,28 @@ def display_signal(
         t.append(f"\n  Why this signal:\n", style="bold dim")
         for r in plain_reasons:
             t.append(f"    • {r}\n", style="white")
+
+    if price_context:
+        pct_vs_200 = (price_context["vs_ema200"] - 1.0) * 100
+        ema200_val = price_context["ema_200"]
+        if price_context["extended_above"]:
+            t.append(
+                f"\n  ⚠  Price is {pct_vs_200:.0f}% above its 200-day average"
+                f" (${ema200_val:,.0f}) — stretched territory\n",
+                style="yellow",
+            )
+        elif price_context["extended_below"]:
+            t.append(
+                f"\n  ℹ  Price is {abs(pct_vs_200):.0f}% below its 200-day average"
+                f" (${ema200_val:,.0f}) — deeply discounted\n",
+                style="dim",
+            )
+        if price_context.get("divergence_applied"):
+            t.append(
+                f"  ⚠  Confidence reduced: price and sentiment are"
+                f" pointing in different directions\n",
+                style="yellow",
+            )
 
     if event.narrative_tipping_point:
         t.append(f"\n  ⚡ Sentiment tipping point — fear/greed shifting fast\n", style="bold yellow")

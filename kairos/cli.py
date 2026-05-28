@@ -35,8 +35,13 @@ def run(
             prices, current_price, fng_scores, fng_ok = asyncio.run(fetch_live_data())
             fng_note = f"Fear & Greed: {fng_scores[-1]}/100" if fng_ok else "sentiment unavailable"
             console.print(f"[dim]Got {len(prices)} price candles, {fng_note}[/dim]\n")
-            event = run_pipeline(prices, fng_scores)
-            display_signal(event, current_price, fng_score=fng_scores[-1], fng_available=fng_ok)
+            from kairos.live import run_pipeline_with_context
+            event, ctx = run_pipeline_with_context(prices, fng_scores)
+            display_signal(
+                event, current_price,
+                fng_score=fng_scores[-1], fng_available=fng_ok,
+                price_context=ctx,
+            )
         except Exception as e:
             console.print(f"[red bold]Error:[/red bold] {e}")
             console.print("[dim]Check your internet connection, or CoinGecko may be rate-limiting.[/dim]")
