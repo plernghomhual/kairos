@@ -30,13 +30,13 @@ def run(
     from kairos.live import fetch_live_data, run_pipeline, display_signal
 
     def _once() -> None:
-        console.print("[dim]Fetching live data from CoinGecko + Reddit...[/dim]")
+        console.print("[dim]Fetching live data from CoinGecko + Fear & Greed Index...[/dim]")
         try:
-            prices, current_price, reddit_counts, reddit_ok = asyncio.run(fetch_live_data())
-            reddit_note = f"{sum(reddit_counts)} Reddit posts" if reddit_ok else "Reddit unavailable"
-            console.print(f"[dim]Got {len(prices)} price candles, {reddit_note}[/dim]\n")
-            event = run_pipeline(prices, reddit_counts)
-            display_signal(event, current_price, reddit_available=reddit_ok)
+            prices, current_price, fng_scores, fng_ok = asyncio.run(fetch_live_data())
+            fng_note = f"Fear & Greed: {fng_scores[-1]}/100" if fng_ok else "sentiment unavailable"
+            console.print(f"[dim]Got {len(prices)} price candles, {fng_note}[/dim]\n")
+            event = run_pipeline(prices, fng_scores)
+            display_signal(event, current_price, fng_score=fng_scores[-1], fng_available=fng_ok)
         except Exception as e:
             console.print(f"[red bold]Error:[/red bold] {e}")
             console.print("[dim]Check your internet connection, or CoinGecko may be rate-limiting.[/dim]")

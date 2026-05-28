@@ -57,6 +57,22 @@ class SignalEnsemble:
         self._model.fit(X, y)
         self._fitted = True
 
+    def fit_raw(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Train on a pre-built feature matrix with real forward-return labels."""
+        if len(set(y.tolist())) < 2:
+            raise ValueError("Training data must contain both bullish (1) and bearish (0) examples")
+        self._model.fit(X, y)
+        self._fitted = True
+
+    def fit_synthetic_fallback(self) -> None:
+        """Last-resort fallback when historical data is insufficient."""
+        b = FeatureVector(0.02, 1.5, 0.0, 0.5, True, 0.3, 1.0, 0.0, 0.0, 0.75, 0.9, 0.25)
+        br = FeatureVector(-0.02, -1.5, 0.1, 0.1, False, 0.5, 0.0, 1.0, 0.0, 0.25, 0.7, 0.5)
+        X = np.vstack([fv.to_array() for fv in [b] * 50 + [br] * 50])
+        y = np.array([1] * 50 + [0] * 50)
+        self._model.fit(X, y)
+        self._fitted = True
+
     def predict(
         self,
         asset: str,
