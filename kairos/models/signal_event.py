@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List
 import uuid
 
 
@@ -14,7 +13,7 @@ class SignalEvent:
     narrative_tipping_point: bool
     mechanism: str                   # human-readable causal chain
     estimated_hours: float           # hours until price impact expected
-    citations: List[str]
+    citations: list[str]
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     triggered_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
