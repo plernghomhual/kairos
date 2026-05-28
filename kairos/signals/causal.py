@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Any
 
 
 class CausalDAG:
@@ -21,7 +21,7 @@ class CausalDAG:
         regime: str,
         anomaly_detected: bool,
         macro_stress: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         p_up = 0.50
         confidence = 1.0
         citations = []

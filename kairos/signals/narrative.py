@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Any
 import numpy as np
 
 
@@ -30,7 +30,7 @@ def _sir_velocity(counts: np.ndarray, population: int) -> float:
 def compute_narrative_features(
     post_counts: list[int],
     population: int = 10_000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Given time series of post/mention counts, compute:
     - narrative_velocity: rate of narrative spread (dI/dt normalized)
