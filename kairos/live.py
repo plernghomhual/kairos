@@ -235,19 +235,31 @@ def display_signal(
     fng_text = f"{_fng_label(fng_score)} ({fng_score}/100)"
 
     plain_reasons = []
+
+    # Sentiment reason — most human-readable, show first
+    if fng_available:
+        if fng_score <= 25:
+            plain_reasons.append(f"Crowd is in extreme fear ({fng_score}/100) — historically a buying opportunity")
+        elif fng_score >= 75:
+            plain_reasons.append(f"Crowd is extremely greedy ({fng_score}/100) — often signals a top is near")
+        elif fng_score <= 40:
+            plain_reasons.append(f"Market sentiment is fearful ({fng_score}/100) — most people are nervous")
+        elif fng_score >= 60:
+            plain_reasons.append(f"Sentiment turning optimistic ({fng_score}/100) — buyers gaining confidence")
+
     for c in event.citations:
         if "Shiller" in c:
             plain_reasons.append("Sentiment momentum is building fast")
         elif "Stage 2" in c or "accumulation" in c.lower():
-            plain_reasons.append("Market is in quiet buy phase")
+            plain_reasons.append("Market is in quiet buy phase — big players accumulating")
         elif "Stage 3" in c or "Stage 4" in c or "distribution" in c.lower():
-            plain_reasons.append("Market is in sell phase")
+            plain_reasons.append("Market is in sell phase — smart money distributing")
         elif "Soros" in c:
-            plain_reasons.append("Market is flipping — uncertainty high")
+            plain_reasons.append("Market is flipping direction — high uncertainty")
         elif "Kindleberger" in c:
             plain_reasons.append("Macro stress is weighing on price")
         elif "Anomaly" in c:
-            plain_reasons.append("Weird price action detected")
+            plain_reasons.append("Unusual price action detected — something is moving")
 
     t = Text()
     t.append(f"\n  {arrow} ", style=f"bold {color}")

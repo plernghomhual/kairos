@@ -36,6 +36,24 @@ class FeatureVector:
         ], dtype=np.float32)
 
 
+def _estimate_hours(fv: "FeatureVector", regime: str) -> float:
+    """Multi-factor time estimate. Accounts for regime urgency, anomalies, vol, and momentum."""
+    base = 72.0  # 3-day baseline for a quiet accumulation market
+    if regime == "transition":
+        base *= 0.50   # market actively changing direction — faster
+    elif regime == "distribution":
+        base *= 0.75   # selling pressure building — moderately faster
+    if fv.anomaly_score > 0:
+        base *= 0.60   # unusual price behavior → move likely sooner
+    if fv.volume_z_score > 1.5:
+        base *= 0.70   # high volume activity → accelerating
+    elif fv.volume_z_score < -1.0:
+        base *= 1.30   # low volume → slower
+    if fv.narrative_velocity > 0.03:
+        base *= 0.65   # sentiment shifting fast → catalyst already in motion
+    return round(min(max(base, 12.0), 168.0), 1)
+
+
 class SignalEnsemble:
     def __init__(self) -> None:
         self._model = xgb.XGBClassifier(
@@ -87,7 +105,7 @@ class SignalEnsemble:
         bullish_prob = float(proba[1])
         direction = "bullish" if bullish_prob > 0.5 else "bearish"
         confidence = bullish_prob if direction == "bullish" else 1.0 - bullish_prob
-        estimated_hours = 48.0 / max(fv.narrative_velocity, 0.1)
+        estimated_hours = _estimate_hours(fv, regime)
 
         return SignalEvent(
             asset=asset,

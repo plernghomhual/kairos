@@ -230,16 +230,20 @@ def test_ensemble_direction_valid(fitted_ensemble):
         assert ev.direction in ("bullish", "bearish")
 
 
-def test_ensemble_zero_velocity_hours_capped(fitted_ensemble):
+def test_ensemble_hours_within_bounds(fitted_ensemble):
+    # Quiet accumulation → moderate estimate within valid range
     fv = FeatureVector(0.01, 0.5, 0.0, 0.0, True, 0.1, 1.0, 0.0, 0.0, 0.7, 0.9, 0.25)
     ev = fitted_ensemble.predict("BTC", fv, citations=[])
-    assert ev.estimated_hours == 168.0
+    assert 12.0 <= ev.estimated_hours <= 168.0
 
 
-def test_ensemble_high_velocity_hours_small(fitted_ensemble):
-    fv = FeatureVector(0.05, 2.0, 0.0, 9999.0, True, 0.1, 1.0, 0.0, 0.0, 0.8, 0.9, 0.25)
-    ev = fitted_ensemble.predict("BTC", fv, citations=[])
-    assert ev.estimated_hours < 1.0
+def test_ensemble_transition_anomaly_hours_shorter(fitted_ensemble):
+    # Transition + anomaly + high vol → faster than quiet accumulation
+    fv_quiet = FeatureVector(0.01, 0.5, 0.0, 0.0, False, 0.1, 1.0, 0.0, 0.0, 0.7, 0.9, 0.25)
+    fv_hot = FeatureVector(0.05, 2.0, 1.0, 0.5, True, 0.1, 0.0, 0.0, 1.0, 0.8, 0.9, 0.25)
+    ev_quiet = fitted_ensemble.predict("BTC", fv_quiet, citations=[], regime="accumulation")
+    ev_hot = fitted_ensemble.predict("BTC", fv_hot, citations=[], regime="transition")
+    assert ev_hot.estimated_hours < ev_quiet.estimated_hours
 
 
 def test_ensemble_citations_passed_through(fitted_ensemble):
