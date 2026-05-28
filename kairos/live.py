@@ -103,8 +103,8 @@ def _price_context(prices: list[float]) -> dict:
         "ema_200": round(ema200, 2),
         "vs_ema200": round(vs_ema200, 3),
         "vs_ema50": round(vs_ema50, 3),
-        "extended_above": vs_ema200 > 1.15,   # >15% above long-term trend
-        "extended_below": vs_ema200 < 0.85,   # >15% below long-term trend
+        "extended_above": bool(vs_ema200 > 1.15),   # >15% above long-term trend
+        "extended_below": bool(vs_ema200 < 0.85),   # >15% below long-term trend
     }
 
 
