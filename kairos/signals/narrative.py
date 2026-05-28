@@ -40,7 +40,7 @@ def compute_narrative_features(
     velocity = _sir_velocity(counts, population)
 
     cumulative_infected = float(np.sum(counts))
-    saturation = cumulative_infected / population
+    saturation = min(cumulative_infected / population, 1.0)
     acceleration = float(counts[-1] - counts[-2]) if len(counts) >= 2 else 0.0
     tipping_point = bool(acceleration > 0 and saturation < 0.5 and velocity > 0.1)
 

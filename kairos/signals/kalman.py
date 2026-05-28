@@ -7,6 +7,9 @@ def kalman_smooth(observations: np.ndarray) -> np.ndarray:
     Same principle used in Apollo navigation — separates signal from noise.
     """
     n = len(observations)
+    if n == 0:
+        return np.array([], dtype=np.float64)
+
     Q = 1e-4   # process noise covariance
     R = 1.0    # measurement noise covariance
 

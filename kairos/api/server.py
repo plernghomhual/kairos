@@ -13,6 +13,7 @@ def create_app(db_path: str = "kairos.db") -> FastAPI:
 
     @app.get("/signals")
     def list_signals(limit: int = 20):
+        limit = max(1, min(limit, 1000))
         rows = conn.execute(
             "SELECT * FROM signal_events ORDER BY triggered_at DESC LIMIT ?", [limit]
         ).fetchall()

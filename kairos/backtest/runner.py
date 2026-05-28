@@ -17,7 +17,8 @@ def evaluate_hit_rate(
     signals: list[dict[str, Any]],
     actuals: list[bool],
 ) -> BacktestResult:
-    assert len(signals) == len(actuals), "signals and actuals must be same length"
+    if len(signals) != len(actuals):
+        raise ValueError(f"signals ({len(signals)}) and actuals ({len(actuals)}) must be same length")
     hits = sum(1 for correct in actuals if correct)
     total = len(actuals)
     hit_rate = hits / total if total > 0 else 0.0

@@ -48,8 +48,12 @@ class SignalEnsemble:
         self._fitted = False
 
     def fit(self, feature_vectors: list[FeatureVector]) -> None:
+        if not feature_vectors:
+            raise ValueError("feature_vectors must not be empty")
         X = np.vstack([fv.to_array() for fv in feature_vectors])
         y = np.array([1 if fv.causal_bullish > 0.5 else 0 for fv in feature_vectors])
+        if len(set(y)) < 2:
+            raise ValueError("Training data must contain both bullish (1) and bearish (0) examples")
         self._model.fit(X, y)
         self._fitted = True
 
@@ -60,6 +64,8 @@ class SignalEnsemble:
         citations: list[str],
         regime: str = "accumulation",
     ) -> SignalEvent:
+        if not self._fitted:
+            raise RuntimeError("Call fit() before predict()")
         X = fv.to_array().reshape(1, -1)
         proba = self._model.predict_proba(X)[0]
         bullish_prob = float(proba[1])
