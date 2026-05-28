@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kairos"
+version = "0.1.0"
+description = "Causal economic signal engine"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=0.10.0",
+    "xgboost>=2.0.0",
+    "hmmlearn>=0.3.0",
+    "networkx>=3.2",
+    "scikit-learn>=1.4.0",
+    "scipy>=1.12.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "praw>=7.7.0",
+    "httpx>=0.27.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "typer>=0.12.0",
+    "python-dotenv>=1.0.0",
+    "feedparser>=6.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+kairos = "kairos.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "httpx>=0.27.0"]
