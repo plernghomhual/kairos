@@ -1,4 +1,3 @@
-import numpy as np
 import pytest
 from kairos.signals.ensemble import SignalEnsemble, FeatureVector
 from kairos.models.signal_event import SignalEvent
@@ -34,3 +33,9 @@ def test_bullish_features_predict_bullish():
     ensemble.fit([make_feature_vector(True)] * 50 + [make_feature_vector(False)] * 50)
     event = ensemble.predict("BTC", make_feature_vector(True), citations=[])
     assert event.direction == "bullish"
+
+
+def test_predict_raises_if_not_fitted():
+    ensemble = SignalEnsemble()
+    with pytest.raises(RuntimeError, match="fit()"):
+        ensemble.predict("BTC", make_feature_vector(), citations=[])
