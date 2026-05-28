@@ -1,6 +1,4 @@
-import os
 import pytest
-import duckdb
 from kairos.db import get_connection, create_schema
 
 def test_schema_creates_all_tables(tmp_path):
