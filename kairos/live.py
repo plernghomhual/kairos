@@ -16,19 +16,21 @@ from kairos.signals.regime import fit_regime_model, predict_regime
 from kairos.signals.causal import CausalDAG
 from kairos.signals.ensemble import SignalEnsemble, FeatureVector
 from kairos.models.signal_event import SignalEvent
+from kairos.model_cache import load_model, save_model
 
 console = Console()
 
-_COINGECKO = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
 _FNG = "https://api.alternative.me/fng/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; kairos-signal-engine/0.1; +https://github.com/kairos)"}
-
 _FNG_FALLBACK = [50] * 30  # neutral when API unavailable
 
+_ASSET_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
 
-async def _fetch_prices(client: httpx.AsyncClient, days: int = 365) -> tuple[list[float], float]:
+
+async def _fetch_prices(client: httpx.AsyncClient, days: int = 365, coin_id: str = "bitcoin") -> tuple[list[float], float]:
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     resp = await client.get(
-        _COINGECKO,
+        url,
         params={"vs_currency": "usd", "days": str(days), "interval": "daily"},
         headers=_HEADERS,
     )
@@ -53,13 +55,17 @@ async def _fetch_fng(client: httpx.AsyncClient, days: int = 365) -> tuple[list[i
         return _FNG_FALLBACK, False
 
 
-async def fetch_live_data() -> tuple[list[float], float, list[int], bool]:
-    """Fetch BTC prices + Fear & Greed index concurrently. No API keys needed.
+async def fetch_live_data(asset: str = "BTC") -> tuple[list[float], float, list[int], bool]:
+    """Fetch prices + Fear & Greed index concurrently. No API keys needed.
 
     Returns: (prices, current_price, fng_scores, fng_available)
+    Raises ValueError for unsupported assets.
     """
+    if asset not in _ASSET_IDS:
+        raise ValueError(f"Unsupported asset '{asset}'. Choose from: {', '.join(_ASSET_IDS)}")
+    coin_id = _ASSET_IDS[asset]
     async with httpx.AsyncClient(timeout=20.0) as client:
-        prices_task = asyncio.create_task(_fetch_prices(client))
+        prices_task = asyncio.create_task(_fetch_prices(client, coin_id=coin_id))
         fng_task = asyncio.create_task(_fetch_fng(client))
         prices, current_price = await prices_task
         fng_scores, fng_ok = await fng_task
@@ -103,8 +109,8 @@ def _price_context(prices: list[float]) -> dict:
         "ema_200": round(ema200, 2),
         "vs_ema200": round(vs_ema200, 3),
         "vs_ema50": round(vs_ema50, 3),
-        "extended_above": bool(vs_ema200 > 1.15),   # >15% above long-term trend
-        "extended_below": bool(vs_ema200 < 0.85),   # >15% below long-term trend
+        "extended_above": vs_ema200 > 1.15,   # >15% above long-term trend
+        "extended_below": vs_ema200 < 0.85,   # >15% below long-term trend
     }
 
 
@@ -194,7 +200,7 @@ def _build_training_data(
     return np.vstack(X_rows), np.array(y_labels)
 
 
-def run_pipeline(prices: list[float], fng_scores: list[int]) -> SignalEvent:
+def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC") -> SignalEvent:
     """Run full 3-layer causal pipeline on real data. Returns a SignalEvent."""
     arr = np.array(prices, dtype=float)
 
@@ -247,28 +253,34 @@ def run_pipeline(prices: list[float], fng_scores: list[int]) -> SignalEvent:
         macro_dff=0.25,
     )
 
-    # Train XGBoost on real historical data with real forward-return labels
-    ensemble = SignalEnsemble()
-    if hmm is not None and len(arr) > 15:
-        try:
-            X, y = _build_training_data(prices, fng_scores, smoothed, anomaly_flags, vol_z_arr, hmm, regime_feats)
-            if len(set(y.tolist())) >= 2:
-                ensemble.fit_raw(X, y)
-            else:
+    # Train XGBoost — use disk cache if available and fresh, else retrain
+    ensemble = load_model(asset, len(prices))
+    if ensemble is None:
+        ensemble = SignalEnsemble()
+        if hmm is not None and len(arr) > 15:
+            try:
+                X, y = _build_training_data(prices, fng_scores, smoothed, anomaly_flags, vol_z_arr, hmm, regime_feats)
+                if len(set(y.tolist())) >= 2:
+                    ensemble.fit_raw(X, y)
+                else:
+                    ensemble.fit_synthetic_fallback()
+            except Exception:
                 ensemble.fit_synthetic_fallback()
-        except Exception:
+        else:
             ensemble.fit_synthetic_fallback()
-    else:
-        ensemble.fit_synthetic_fallback()
+        try:
+            save_model(ensemble, asset, len(prices))
+        except Exception:
+            pass
 
-    return ensemble.predict("BTC", fv, citations=causal["citations"], regime=regime)
+    return ensemble.predict(asset, fv, citations=causal["citations"], regime=regime)
 
 
 def run_pipeline_with_context(
-    prices: list[float], fng_scores: list[int]
+    prices: list[float], fng_scores: list[int], asset: str = "BTC"
 ) -> tuple[SignalEvent, dict]:
     """Same as run_pipeline() but also returns price context (EMA, divergence)."""
-    event = run_pipeline(prices, fng_scores)
+    event = run_pipeline(prices, fng_scores, asset=asset)
     ctx = _price_context(prices)
     adjusted_conf, diverged = _apply_divergence_penalty(
         event.confidence, event.direction, ctx, fng_scores[-1] if fng_scores else 50
@@ -337,7 +349,7 @@ def display_signal(
     t.append(f"\n  {arrow} ", style=f"bold {color}")
     t.append(f"{direction_word}", style=f"bold {color}")
     t.append(f"  —  {conf_pct}% sure\n", style="dim")
-    t.append(f"\n  BTC right now:  ", style="dim")
+    t.append(f"\n  {event.asset} right now:  ", style="dim")
     t.append(f"${current_price:,.0f}\n", style="bold white")
     t.append(f"  Market phase:   ", style="dim")
     t.append(f"{regime_plain}\n", style="white")
@@ -388,7 +400,7 @@ def display_signal(
 
     console.print(Panel(
         t,
-        title="[bold white]KAIROS  ·  BTC Live Signal[/bold white]",
+        title=f"[bold white]KAIROS  ·  {event.asset} Live Signal[/bold white]",
         border_style=color,
         padding=(0, 2),
     ))

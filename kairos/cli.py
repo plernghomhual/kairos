@@ -30,11 +30,11 @@ def run(
       kairos run --watch      # refresh every 5 minutes
       kairos run -w -i 60     # refresh every 60 seconds
     """
-    from kairos.live import fetch_live_data, run_pipeline_with_context, display_signal, _ASSETS
+    from kairos.live import fetch_live_data, run_pipeline_with_context, display_signal, _ASSET_IDS
 
     asset = asset.upper()
-    if asset not in _ASSETS:
-        console.print(f"[red bold]Error:[/red bold] Unknown asset '{asset}'. Supported: {', '.join(_ASSETS.keys())}")
+    if asset not in _ASSET_IDS:
+        console.print(f"[red bold]Error:[/red bold] Unknown asset '{asset}'. Supported: {', '.join(_ASSET_IDS.keys())}")
         raise typer.Exit(code=1)
 
     def _once() -> None:
