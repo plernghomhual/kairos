@@ -71,6 +71,10 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
             outcome                 VARCHAR
         )
     """)
+    # Migrations — safe to run on old DBs (IF NOT EXISTS guards)
+    conn.execute("ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS price_at_signal DOUBLE")
+    conn.execute("ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS price_at_expiry DOUBLE")
+    conn.execute("ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS outcome VARCHAR")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_ts ON signal_events (asset, triggered_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_outcome ON signal_events (asset, outcome)")
 
