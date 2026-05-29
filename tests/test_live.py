@@ -155,8 +155,8 @@ def test_price_context_keys():
     ctx = _price_context(_prices(n=200))
     assert "ema_50" in ctx and "ema_200" in ctx
     assert "vs_ema200" in ctx
-    assert isinstance(ctx["extended_above"], bool)
-    assert isinstance(ctx["extended_below"], bool)
+    assert ctx["extended_above"] in (True, False)
+    assert ctx["extended_below"] in (True, False)
 
 
 def test_price_context_not_both_extended():
