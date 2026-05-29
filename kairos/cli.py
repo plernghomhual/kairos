@@ -17,7 +17,7 @@ console = Console()
 def _default(ctx: typer.Context) -> None:
     """Run live BTC signal (default). Use subcommands for more options."""
     if ctx.invoked_subcommand is None:
-        run()
+        run(asset="BTC", watch=False, interval=300)
 
 
 @app.command()
