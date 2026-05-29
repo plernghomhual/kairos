@@ -252,6 +252,49 @@ def test_ensemble_citations_passed_through(fitted_ensemble):
     assert ev.citations == cites
 
 
+def test_ensemble_save_load(tmp_path):
+    e = SignalEnsemble()
+    e.fit([_fv(True)] * 50 + [_fv(False)] * 50)
+    p = str(tmp_path / "model.pkl")
+    e.save(p)
+    loaded = SignalEnsemble.load(p)
+    for bullish in [True, False]:
+        ev = loaded.predict("BTC", _fv(bullish), citations=[])
+        assert 0.0 <= ev.confidence <= 1.0
+        assert ev.direction in ("bullish", "bearish")
+
+
+def test_ensemble_save_unfitted_raises(tmp_path):
+    e = SignalEnsemble()
+    p = str(tmp_path / "bad.pkl")
+    with pytest.raises(RuntimeError, match="unfitted"):
+        e.save(p)
+
+
+def test_ensemble_load_nonexistent_raises():
+    with pytest.raises(FileNotFoundError):
+        SignalEnsemble.load("/nonexistent/path.pkl")
+
+
+def test_ensemble_is_stale_false_when_same_count():
+    e = SignalEnsemble()
+    e.fit_raw(np.zeros((10, 5)), np.array([0, 1] * 5), candle_count=100)
+    assert e.is_stale(100) == False
+
+
+def test_ensemble_is_stale_true_when_grown():
+    e = SignalEnsemble()
+    e.fit_raw(np.zeros((10, 5)), np.array([0, 1] * 5), candle_count=100)
+    assert e.is_stale(200) == True
+
+
+def test_ensemble_is_stale_custom_threshold():
+    e = SignalEnsemble()
+    e.fit_raw(np.zeros((10, 5)), np.array([0, 1] * 5), candle_count=100)
+    assert e.is_stale(110, max_growth=50) == False  # only +10
+    assert e.is_stale(160, max_growth=50) == True   # +60 > 50
+
+
 # ── Backtest ──────────────────────────────────────────────────────────────────
 
 def _sig():

@@ -44,3 +44,12 @@ def test_separate_cache_per_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(mc, "_CACHE_DIR", tmp_path)
     mc.save_model(_fitted(), "BTC", 100)
     assert mc.load_model("ETH", 100) is None  # different asset → no cache
+
+
+def test_corrupt_meta_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(mc, "_CACHE_DIR", tmp_path)
+    mc.save_model(_fitted(), "BTC", 100)
+    # Overwrite meta with garbage
+    _, meta = mc._paths("BTC")
+    meta.write_text("not valid json {{{{")
+    assert mc.load_model("BTC", 100) is None  # corrupt meta → safe fallback

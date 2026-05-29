@@ -71,6 +71,8 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
             outcome                 VARCHAR
         )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_ts ON signal_events (asset, triggered_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_outcome ON signal_events (asset, outcome)")
 
 
 def save_signal(
@@ -124,11 +126,14 @@ def resolve_expired_signals(
         WHERE asset = ?
           AND outcome IS NULL
           AND price_at_signal IS NOT NULL
-          AND triggered_at + INTERVAL (CAST(estimated_hours AS INTEGER)) HOUR <= ?
+          AND triggered_at + INTERVAL (CAST(estimated_hours * 3600 AS INTEGER)) SECOND <= ?
         """,
         [asset, now],
     ).fetchall()
 
+    # MVP note: outcome is evaluated against current_price at resolution time, not
+    # the exact price at signal expiry. Accuracy degrades if kairos run is called
+    # many hours after a signal expired. Full solution requires stored price history.
     resolved = 0
     for row_id, direction, price_at_signal, triggered_at, estimated_hours in rows:
         if direction == "bullish":

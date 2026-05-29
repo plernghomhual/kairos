@@ -6,10 +6,18 @@ import uvicorn
 from rich.console import Console
 
 app = typer.Typer(
-    help="Kairos — sees what moves before price does.\n\nStart here:  kairos run",
-    no_args_is_help=True,
+    help="Kairos — sees what moves before price does.",
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
 console = Console()
+
+
+@app.callback(invoke_without_command=True)
+def _default(ctx: typer.Context) -> None:
+    """Run live BTC signal (default). Use subcommands for more options."""
+    if ctx.invoked_subcommand is None:
+        run()
 
 
 @app.command()

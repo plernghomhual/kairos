@@ -10,8 +10,8 @@ _CACHE_DIR = Path.home() / ".kairos"
 
 def _paths(asset: str) -> tuple[Path, Path]:
     _CACHE_DIR.mkdir(exist_ok=True)
-    base = _CACHE_DIR / f"model_{asset.lower()}"
-    return base.with_suffix(".ubj"), base.with_name(base.name + ".meta.json")
+    base = str(_CACHE_DIR / f"model_{asset.lower()}")
+    return Path(base + ".ubj"), Path(base + ".meta.json")
 
 
 def load_model(asset: str, n_candles: int):
@@ -20,8 +20,11 @@ def load_model(asset: str, n_candles: int):
     ubj, meta = _paths(asset)
     if not ubj.exists() or not meta.exists():
         return None
-    with open(meta) as f:
-        m = json.load(f)
+    try:
+        with open(meta) as f:
+            m = json.load(f)
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
     if abs(n_candles - m.get("n_candles", 0)) >= 50:
         return None
     ensemble = SignalEnsemble()

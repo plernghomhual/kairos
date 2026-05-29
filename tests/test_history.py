@@ -156,6 +156,39 @@ def test_hit_rate_calculation():
 
 
 # ---------------------------------------------------------------------------
+# test_hit_rate_zero_rows_returns_none
+# ---------------------------------------------------------------------------
+
+def test_hit_rate_zero_rows_returns_none():
+    conn = _make_conn()
+    stats = get_hit_rate(conn, asset="BTC")
+    assert stats["total_resolved"] == 0
+    assert stats["hit_rate"] is None
+
+
+# ---------------------------------------------------------------------------
+# test_resolve_different_asset_not_touched
+# ---------------------------------------------------------------------------
+
+def test_resolve_different_asset_not_touched():
+    conn = _make_conn()
+    conn.execute(
+        """
+        INSERT INTO signal_events (
+            id, asset, direction, confidence, regime,
+            narrative_velocity, narrative_tipping_point, mechanism,
+            estimated_hours, citations, triggered_at,
+            price_at_signal, price_at_expiry, outcome
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        """,
+        ["id-eth", "ETH", "bullish", 0.8, "accumulation",
+         0.5, False, "test", 1, "[]", "2020-01-01 00:00:00", 40_000.0],
+    )
+    resolved = resolve_expired_signals(conn, "BTC", current_price=45_000.0)
+    assert resolved == 0  # ETH signal not touched by BTC resolution
+
+
+# ---------------------------------------------------------------------------
 # test_unresolved_not_counted
 # ---------------------------------------------------------------------------
 

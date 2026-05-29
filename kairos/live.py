@@ -132,14 +132,15 @@ def _apply_divergence_penalty(
       Same logic inverted.
     """
     if direction == "bullish" and fng_score <= 30 and ctx["extended_above"]:
-        stretch = ctx["vs_ema200"] - 1.0          # e.g. 0.35 for 35% above EMA200
-        penalty = max(0.60, 1.0 - stretch * 0.5)  # cap: never below 60% of original
-        return round(confidence * penalty, 4), True
+        stretch = ctx["vs_ema200"] - 1.0
+        penalty = max(0.60, 1.0 - stretch * 0.5)
+        # Clamp to 0.5: penalty never flips direction (that would be inconsistent)
+        return round(max(confidence * penalty, 0.5), 4), True
 
     if direction == "bearish" and fng_score >= 70 and ctx["extended_below"]:
         stretch = 1.0 - ctx["vs_ema200"]
         penalty = max(0.60, 1.0 - stretch * 0.5)
-        return round(confidence * penalty, 4), True
+        return round(max(confidence * penalty, 0.5), 4), True
 
     return confidence, False
 
@@ -163,6 +164,7 @@ def _build_training_data(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Historical feature matrix + 2-day forward-return labels. No leakage."""
     arr = np.array(prices, dtype=float)
+    assert len(smoothed) == len(arr), "smoothed must have same length as prices"
     fng_arr = np.array(fng_scores, dtype=float)
     n = len(arr)
 
@@ -202,6 +204,8 @@ def _build_training_data(
 
 def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC") -> SignalEvent:
     """Run full 3-layer causal pipeline on real data. Returns a SignalEvent."""
+    if not fng_scores:
+        fng_scores = list(_FNG_FALLBACK)
     arr = np.array(prices, dtype=float)
 
     # Layer 1 — Reality: Kalman smooth + anomaly detection

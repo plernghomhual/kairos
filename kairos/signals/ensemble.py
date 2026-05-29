@@ -1,3 +1,6 @@
+import os
+import pickle
+import time
 from dataclasses import dataclass
 import numpy as np
 import xgboost as xgb
@@ -64,6 +67,8 @@ class SignalEnsemble:
             random_state=42,
         )
         self._fitted = False
+        self._trained_at: float | None = None  # timestamp when trained
+        self._candle_count: int = 0  # how many candles in training data
 
     def fit(self, feature_vectors: list[FeatureVector]) -> None:
         if not feature_vectors:
@@ -75,12 +80,14 @@ class SignalEnsemble:
         self._model.fit(X, y)
         self._fitted = True
 
-    def fit_raw(self, X: np.ndarray, y: np.ndarray) -> None:
+    def fit_raw(self, X: np.ndarray, y: np.ndarray, candle_count: int = 0) -> None:
         """Train on a pre-built feature matrix with real forward-return labels."""
         if len(set(y.tolist())) < 2:
             raise ValueError("Training data must contain both bullish (1) and bearish (0) examples")
         self._model.fit(X, y)
         self._fitted = True
+        self._trained_at = time.time()
+        self._candle_count = candle_count
 
     def fit_synthetic_fallback(self) -> None:
         """Last-resort fallback when historical data is insufficient."""
@@ -90,6 +97,38 @@ class SignalEnsemble:
         y = np.array([1] * 50 + [0] * 50)
         self._model.fit(X, y)
         self._fitted = True
+        self._trained_at = time.time()
+        self._candle_count = 0
+
+    def save(self, path: str) -> None:
+        """Pickle the fitted model + metadata to disk."""
+        if not self._fitted:
+            raise RuntimeError("Cannot save unfitted model")
+        payload = {
+            "model_bytes": pickle.dumps(self._model),
+            "trained_at": self._trained_at,
+            "candle_count": self._candle_count,
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(payload, f)
+
+    @classmethod
+    def load(cls, path: str) -> "SignalEnsemble":
+        """Load a pickled model from disk and return a fitted SignalEnsemble."""
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        inst = cls()
+        inst._model = pickle.loads(payload["model_bytes"])
+        inst._trained_at = payload["trained_at"]
+        inst._candle_count = payload["candle_count"]
+        inst._fitted = True
+        return inst
+
+    def is_stale(self, current_candle_count: int, max_growth: int = 50) -> bool:
+        """Check if model was trained on significantly fewer candles than now.
+        Returns True if candle_count grew by more than `max_growth` since training."""
+        return current_candle_count - self._candle_count > max_growth
 
     def predict(
         self,
