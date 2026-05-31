@@ -552,6 +552,17 @@ class SignalEnsemble:
         bullish_prob = float(proba[1])
         direction = "bullish" if bullish_prob > 0.5 else "bearish"
         confidence = bullish_prob if direction == "bullish" else 1.0 - bullish_prob
+
+        if regime == "lv_down":
+            momentum_strength = min(abs(fv.kalman_slope) * 0.005, 0.5)
+            if fv.kalman_slope < 0:
+                if direction == "bearish":
+                    confidence = min(confidence + momentum_strength, 0.95)
+                else:
+                    confidence = max(confidence - momentum_strength * 1.5, 0.51)
+            elif fv.kalman_slope > 0 and direction == "bullish":
+                confidence = min(confidence + momentum_strength * 0.5, 0.95)
+
         estimated_hours = _estimate_hours(fv, regime)
         return SignalEvent(
             asset=asset,
