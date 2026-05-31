@@ -19,7 +19,14 @@ repos:
     hooks:
       - id: pytest-quick
         name: pytest (fast tests)
-        entry: python -m pytest tests/ -q --tb=short -k "not backtest and not integration"
+        entry: >
+          bash -c 'if [ -x .venv/bin/python ]; then
+          .venv/bin/python -m pytest tests/ -q --tb=short -k "not backtest and not integration";
+          elif command -v python >/dev/null 2>&1; then
+          python -m pytest tests/ -q --tb=short -k "not backtest and not integration";
+          else
+          python3 -m pytest tests/ -q --tb=short -k "not backtest and not integration";
+          fi'
         language: system
         types: [python]
         pass_filenames: false

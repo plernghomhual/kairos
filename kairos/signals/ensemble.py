@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -14,7 +15,7 @@ REGIMES = ["lv_up", "hv_up", "lv_down", "hv_down"]
 
 FEATURE_DIM: int = 0
 _NUMERIC_TYPES = (int, float, np.integer, np.floating)
-_PARAM_CACHE_DIR = Path.home() / ".kairos"
+_PARAM_CACHE_DIR = Path(os.getenv("KAIROS_CACHE_DIR", str(Path.home() / ".kairos")))
 DEFAULT_MODEL_PARAMS = {
     "n_estimators": 100,
     "max_depth": 4,

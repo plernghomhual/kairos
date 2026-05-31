@@ -83,6 +83,7 @@ def fit_regime_model(features: np.ndarray, n_states: int = 4) -> GaussianHMM:
         random_state=42,
     )
     _fit_quietly(model, matrix)
+    _apply_variance_inflation(matrix, model)
     _attach_regime_labels(model)
     return model
 
@@ -193,6 +194,7 @@ def _fit_with_params(features: np.ndarray, params: dict[str, Any]) -> GaussianHM
         random_state=int(params["random_state"]),
     )
     _fit_quietly(model, features)
+    _apply_variance_inflation(features, model)
     _attach_regime_labels(model)
     return model
 
@@ -330,6 +332,43 @@ def _evaluate_candidate(
         }
     except Exception:
         return None
+
+
+def _apply_variance_inflation(features: np.ndarray, model: GaussianHMM) -> None:
+    """Reduce self-transition bias when recent volatility is elevated.
+
+    Computes the z-score of recent (last 20) volatility vs the full history.
+    When z > 0.5, decreases diagonal self-transition probabilities and
+    distributes the mass evenly across off-diagonal entries, forcing the
+    HMM to consider state changes during volatile periods.
+    """
+    vol_col = features[:, 1] if features.shape[1] > 1 else np.abs(features[:, 0])
+    full_mean = float(np.mean(vol_col))
+    full_std = float(np.std(vol_col))
+    if full_std == 0.0:
+        return
+
+    recent = vol_col[-20:] if len(vol_col) >= 20 else vol_col
+    recent_mean = float(np.mean(recent))
+    vol_z = (recent_mean - full_mean) / full_std
+
+    if vol_z < 0.5:
+        return
+
+    inflation = min((vol_z - 0.5) * 0.15, 0.3)
+    transmat = np.copy(model.transmat_)
+    n = transmat.shape[0]
+
+    for i in range(n):
+        diag = transmat[i, i]
+        reduction = diag * inflation
+        transmat[i, i] = diag - reduction
+        for j in range(n):
+            if j != i:
+                transmat[i, j] += reduction / (n - 1)
+
+    transmat /= transmat.sum(axis=1, keepdims=True)
+    model.transmat_ = transmat
 
 
 def _fit_quietly(model: GaussianHMM, features: np.ndarray) -> None:

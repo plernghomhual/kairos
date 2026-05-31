@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 from dataclasses import fields
 from datetime import datetime, timezone
 
@@ -6,8 +8,29 @@ import duckdb
 
 from kairos.models.signal_event import SignalEvent
 
+_logger = logging.getLogger(__name__)
+_DB_RETRY_MAX = 5
+_DB_RETRY_BACKOFF = 0.5
+
 
 def get_connection(db_path: str = "kairos.db") -> duckdb.DuckDBPyConnection:
+    """Connect with retry on lock contention."""
+    backoff = _DB_RETRY_BACKOFF
+    for attempt in range(1, _DB_RETRY_MAX + 1):
+        try:
+            return duckdb.connect(db_path)
+        except (duckdb.IOException, OSError) as exc:
+            if "lock" in str(exc).lower():
+                _logger.warning(
+                    "DuckDB lock conflict (attempt %d/%d); retrying in %.1fs",
+                    attempt,
+                    _DB_RETRY_MAX,
+                    backoff,
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 4.0)
+            else:
+                raise
     return duckdb.connect(db_path)
 
 

@@ -11,9 +11,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 import duckdb
+import numpy as np
 
 from kairos.db import create_schema, get_connection
 from kairos.models.signal_event import SignalEvent
+
+ATR_MULTIPLIER_LONG = 3.0
+ATR_MULTIPLIER_SHORT = 2.0
+_MIN_PRICE_HISTORY = 30
+
+
+def _atr(prices: list[float], period: int = 14) -> float:
+    if len(prices) < 2:
+        return prices[-1] * 0.02 if prices else 0.0
+    arr = np.array(prices, dtype=float)
+    diffs = np.abs(np.diff(arr[-period - 1 :] if len(arr) > period else arr))
+    return float(np.mean(diffs)) if len(diffs) > 0 else float(arr[-1]) * 0.02
 
 
 @dataclass
@@ -24,6 +37,9 @@ class PaperPosition:
     entry_time: datetime
     size: float
     signal_id: str
+    entry_regime: str = "lv_up"
+    high_watermark: float | None = None
+    low_watermark: float | None = None
     exit_price: float | None = None
     exit_time: datetime | None = None
     pnl_pct: float | None = None
@@ -48,6 +64,7 @@ class PaperTradingEngine:
     def __init__(self, initial_capital: float = 10_000.0, db_path: str | None = None):
         self.initial_capital = float(initial_capital)
         self._accounts: dict[str, PaperAccount] = {}
+        self._price_history: dict[str, list[float]] = {}
         self._conn: duckdb.DuckDBPyConnection | None = None
         if db_path is not None:
             self._conn = get_connection(db_path)
@@ -55,7 +72,14 @@ class PaperTradingEngine:
             self._load_trades()
 
     def process_signal(self, event: SignalEvent, current_price: float) -> PaperPosition | None:
-        """Open, close, hold, or flip a paper position from a Kairos signal."""
+        """Open, close, hold, or flip a paper position from a Kairos signal.
+
+        Exits use regime-transition + ATR trailing-stop gating to avoid
+        premature signal-flip exits — trades only close when the HMM
+        regime changes, the ATR trailing stop is breached, or max hold
+        time is exceeded.
+        """
+        self._update_price_history(event.asset, current_price)
         account = self._get_or_create_account(event.asset)
 
         if event.direction == "neutral":
@@ -76,6 +100,11 @@ class PaperTradingEngine:
             self.update_price(event.asset, current_price)
             return None
 
+        # Direction flipped — apply exit gating
+        if not _should_exit(account.open_position, event, current_price, self._price_history.get(event.asset, [])):
+            self.update_price(event.asset, current_price)
+            return None
+
         try:
             self._close_position(account, current_price, event)
         except Exception:
@@ -86,15 +115,30 @@ class PaperTradingEngine:
 
     def update_price(self, asset: str, price: float) -> None:
         """Update mark-to-market P&L and equity for an open position."""
+        self._update_price_history(asset, price)
         account = self._get_or_create_account(asset)
         position = account.open_position
         if position is None:
             self._append_equity(account, account.current_capital)
             return
 
+        # Track watermarks for ATR trailing stop
+        if position.direction == "long":
+            if position.high_watermark is None or price > position.high_watermark:
+                position.high_watermark = price
+        else:
+            if position.low_watermark is None or price < position.low_watermark:
+                position.low_watermark = price
+
         position.pnl_pct = _position_return(position, price)
         equity = account.current_capital * (1 + position.size * position.pnl_pct)
         self._append_equity(account, equity)
+
+    def _update_price_history(self, asset: str, price: float) -> None:
+        hist = self._price_history.setdefault(asset, [])
+        hist.append(float(price))
+        if len(hist) > _MIN_PRICE_HISTORY + 20:
+            del hist[: len(hist) - _MIN_PRICE_HISTORY]
 
     def get_account(self, asset: str) -> PaperAccount:
         """Return account state for an asset."""
@@ -168,6 +212,9 @@ class PaperTradingEngine:
             entry_time=event.triggered_at,
             size=_kelly(event.confidence),
             signal_id=event.id,
+            entry_regime=event.regime,
+            high_watermark=entry_price if direction == "long" else None,
+            low_watermark=entry_price if direction == "short" else None,
         )
         account.open_position = position
         account.positions.append(position)
@@ -311,6 +358,44 @@ def _slippage(regime: str, direction: str = "buy") -> float:
     return _compute_slippage(regime, 0.0, direction=direction)
 
 
+def _should_exit(
+    position: PaperPosition,
+    event: SignalEvent,
+    current_price: float,
+    price_history: list[float],
+) -> bool:
+    """Determine whether a position should exit under state-triggered rules.
+
+    Three gates — exit passes if ANY is true:
+    a) Regime transition: HMM detected a change since entry.
+    b) ATR trailing stop: price reversed beyond ATR multiple from watermark.
+    c) Max hold: estimated_hours has elapsed.
+    """
+    # Gate a: regime transition
+    if event.regime != position.entry_regime:
+        return True
+
+    # Gate b: ATR trailing stop
+    atr_val = _atr(price_history) if price_history else 0.0
+    if atr_val > 0:
+        if position.direction == "long":
+            hwm = position.high_watermark or position.entry_price
+            if current_price < hwm - ATR_MULTIPLIER_LONG * atr_val:
+                return True
+        else:
+            lwm = position.low_watermark or position.entry_price
+            if current_price > lwm + ATR_MULTIPLIER_SHORT * atr_val:
+                return True
+
+    # Gate c: max hold
+    max_hours = event.estimated_hours or 72.0
+    hold_hours = (event.triggered_at - position.entry_time).total_seconds() / 3600
+    if hold_hours >= max_hours:
+        return True
+
+    return False
+
+
 def _signal_direction(direction: str) -> str | None:
     if direction == "bullish":
         return "long"
@@ -352,6 +437,7 @@ def _position_from_row(row: tuple[Any, ...]) -> PaperPosition:
         exit_time=_as_utc(exit_time) if exit_time is not None else None,
         pnl_pct=float(pnl_pct) if pnl_pct is not None else None,
         closed=bool(closed),
+        entry_regime="lv_up",
     )
 
 

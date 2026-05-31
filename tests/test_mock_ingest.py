@@ -208,4 +208,5 @@ async def test_partial_api_failure_keeps_price_data(monkeypatch):
     assert result["prices"]["available"] is True
     assert result["prices"]["data"]["current_price"] == 101.0
     assert result["github"]["available"] is False
-    assert "github down" in result["github"]["error"]
+    # Circuit breaker replaces exception message with fallback
+    assert result["github"]["error"] is not None

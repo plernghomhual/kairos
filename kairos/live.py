@@ -4,6 +4,7 @@ No API keys needed — CoinGecko free tier + alternative.me Fear & Greed Index.
 """
 
 import asyncio
+import logging
 import threading
 
 import httpx
@@ -12,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from kairos.circuit_breaker import CIRCUIT_BREAKERS
 from kairos.model_cache import load_model, save_model
 from kairos.models.signal_event import SignalEvent
 from kairos.signals.anomaly import detect_anomalies
@@ -19,6 +21,9 @@ from kairos.signals.causal import CausalDAG
 from kairos.signals.ensemble import FeatureVector, SignalEnsemble
 from kairos.signals.kalman import kalman_smooth
 from kairos.signals.regime import fit_regime_model, predict_regime
+
+_logger = logging.getLogger(__name__)
+_RETRY_MAX_BACKOFF = 16.0
 
 console = Console()
 
@@ -32,16 +37,33 @@ _FNG_FALLBACK = [50] * 30  # neutral when API unavailable
 _ASSET_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
 
 
+async def _coingecko_get(client: httpx.AsyncClient, url: str, params: dict) -> httpx.Response:
+    """GET with retry + exponential backoff on 429 rate limits."""
+    backoff = 1.0
+    for attempt in range(5):
+        resp = await client.get(url, params=params, headers=_HEADERS)
+        status = getattr(resp, "status_code", 200)
+        if status != 429:
+            if hasattr(resp, "raise_for_status"):
+                resp.raise_for_status()
+            return resp
+        _logger.warning("CoinGecko 429 rate-limited (attempt %d/5); backing off %.0fs", attempt + 1, backoff)
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, _RETRY_MAX_BACKOFF)
+    if hasattr(resp, "raise_for_status"):
+        resp.raise_for_status()
+    return resp
+
+
 async def _fetch_prices(
     client: httpx.AsyncClient, days: int = 365, coin_id: str = "bitcoin"
 ) -> tuple[list[float], float, list[float]]:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-    resp = await client.get(
+    resp = await _coingecko_get(
+        client,
         url,
-        params={"vs_currency": "usd", "days": str(days), "interval": "daily"},
-        headers=_HEADERS,
+        {"vs_currency": "usd", "days": str(days), "interval": "daily"},
     )
-    resp.raise_for_status()
     data = resp.json()
     prices = [p[1] for p in data["prices"]]
     volumes = [v[1] for v in data.get("total_volumes", [])]
@@ -418,6 +440,19 @@ class DataFetchSupervisor:
     async def _run_source(self, name: str, asset: str) -> tuple[str, dict]:
         source_fn = getattr(self, f"_fetch_{name}_source")
         last_exc: Exception | None = None
+
+        breaker_name = {"prices": "coingecko", "fng": "fng", "github": "github", "whale": "solana_rpc"}.get(name)
+        breaker = CIRCUIT_BREAKERS.get(breaker_name) if breaker_name else None
+
+        if breaker is not None:
+            result = await breaker.call(
+                lambda a=asset: source_fn(a),
+                fallback=lambda: {"available": False, "error": "circuit open"},
+            )
+            if isinstance(result, dict) and result.get("available") is False:
+                return name, result
+            return name, {"available": True, "data": result}
+
         for _ in range(max(self.max_retries, 1)):
             try:
                 result = await source_fn(asset)

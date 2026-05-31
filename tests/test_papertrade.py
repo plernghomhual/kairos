@@ -61,10 +61,26 @@ def test_process_signal_closes_position():
 
 
 def test_process_signal_flips_direction():
+    """Same-regime direction flip → exit gate holds the position."""
     engine = PaperTradingEngine(initial_capital=10_000.0)
     engine.process_signal(_event("bullish", event_id="long"), current_price=100.0)
 
+    # Same regime (lv_up → lv_up), no ATR breach → gate blocks flip
     opened = engine.process_signal(_event("bearish", event_id="short"), current_price=95.0)
+
+    account = engine.get_account("BTC")
+    assert opened is None
+    assert account.open_position is not None
+    assert account.open_position.direction == "long"
+    assert len(account.trades) == 0
+
+
+def test_process_signal_flips_on_regime_change():
+    """Direction flip WITH regime change → exit gate allows flip."""
+    engine = PaperTradingEngine(initial_capital=10_000.0)
+    engine.process_signal(_event("bullish", event_id="long", regime="lv_up"), current_price=100.0)
+
+    opened = engine.process_signal(_event("bearish", event_id="short", regime="lv_down"), current_price=95.0)
 
     account = engine.get_account("BTC")
     assert opened is not None
