@@ -18,7 +18,7 @@ FROM python:${PYTHON_VERSION}-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    KAIROS_DB_PATH=/kairos/kairos.db \
+    KAIROS_DB_PATH=/data/kairos.db \
     PATH=/usr/local/bin:$PATH
 
 RUN apt-get update \
@@ -26,15 +26,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system appuser \
     && useradd --system --gid appuser --home-dir /home/appuser --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /kairos \
-    && chown appuser:appuser /kairos
+    && mkdir -p /kairos /data \
+    && chown appuser:appuser /kairos /data
 
 COPY --from=builder /install/ /usr/local/
 
 WORKDIR /kairos
 
 COPY --chown=appuser:appuser kairos/ ./kairos/
-COPY --chown=appuser:appuser kairos.db ./kairos.db
 
 USER appuser
 

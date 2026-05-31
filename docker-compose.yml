@@ -8,9 +8,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./kairos.db:/kairos/kairos.db
+      - kairos-data:/data
     environment:
-      KAIROS_DB_PATH: /kairos/kairos.db
+      KAIROS_DB_PATH: /data/kairos.db
       FRED_API_KEY: ${FRED_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
@@ -19,3 +19,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+volumes:
+  kairos-data:

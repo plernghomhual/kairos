@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from dataclasses import fields
 from datetime import datetime, timezone
@@ -13,8 +14,15 @@ _DB_RETRY_MAX = 5
 _DB_RETRY_BACKOFF = 0.5
 
 
+def _resolve_db_path(db_path: str) -> str:
+    if db_path == "kairos.db":
+        return os.getenv("KAIROS_DB_PATH", db_path)
+    return db_path
+
+
 def get_connection(db_path: str = "kairos.db") -> duckdb.DuckDBPyConnection:
     """Connect with retry on lock contention."""
+    db_path = _resolve_db_path(db_path)
     backoff = _DB_RETRY_BACKOFF
     for attempt in range(1, _DB_RETRY_MAX + 1):
         try:

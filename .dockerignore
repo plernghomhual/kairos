@@ -17,6 +17,5 @@ tasks/
 docs/
 session-*.md
 *.db
-!kairos.db
 Dockerfile
 docker-compose.yml

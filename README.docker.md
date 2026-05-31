@@ -13,7 +13,7 @@ docker run --rm kairos
 docker build -t kairos .
 ```
 
-The image uses a multi-stage `python:3.12.11-slim` build, installs only runtime dependencies, and runs as the non-root `appuser`.
+The image uses a multi-stage `python:3.12.11-slim` build, installs only runtime dependencies, and runs as the non-root `appuser`. It does not bake in a local DuckDB file; runtime data lives under `/data`.
 
 ## Run Headless
 
@@ -45,11 +45,11 @@ curl http://127.0.0.1:8000/health
 
 ## Mount A Custom Database
 
-Kairos reads `KAIROS_DB_PATH`, which defaults to `/kairos/kairos.db` in the image.
+Kairos reads `KAIROS_DB_PATH`, which defaults to `/data/kairos.db` in the image.
 
 ```bash
 docker run --rm \
-  -v "$(pwd)/kairos.db:/kairos/kairos.db" \
+  -v kairos-data:/data \
   kairos
 ```
 
@@ -57,8 +57,8 @@ Use a different path if needed:
 
 ```bash
 docker run --rm \
-  -v "$(pwd)/data:/data" \
-  -e KAIROS_DB_PATH=/data/kairos.db \
+  -v "$(pwd)/kairos-data:/runtime-data" \
+  -e KAIROS_DB_PATH=/runtime-data/kairos.db \
   kairos
 ```
 
@@ -96,4 +96,4 @@ docker compose logs -f kairos
 docker compose down
 ```
 
-Compose mounts `./kairos.db` to `/kairos/kairos.db` and passes through `FRED_API_KEY`, `GITHUB_TOKEN`, and `SOLANA_RPC_URL` from the host environment.
+Compose mounts the `kairos-data` named volume to `/data` and passes through `FRED_API_KEY`, `GITHUB_TOKEN`, and `SOLANA_RPC_URL` from the host environment.

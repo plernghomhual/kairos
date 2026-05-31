@@ -13,3 +13,15 @@ def test_schema_creates_all_tables(tmp_path):
     assert "macro_data" in table_names
     assert "signal_events" in table_names
     conn.close()
+
+
+def test_default_connection_uses_kairos_db_path_env(tmp_path, monkeypatch):
+    db_path = tmp_path / "runtime" / "kairos.db"
+    db_path.parent.mkdir()
+    monkeypatch.setenv("KAIROS_DB_PATH", str(db_path))
+
+    conn = get_connection()
+    create_schema(conn)
+    conn.close()
+
+    assert db_path.exists()
