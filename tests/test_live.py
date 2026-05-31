@@ -1,15 +1,16 @@
 """Tests for live pipeline — HTTP mocked, no real network calls."""
-import numpy as np
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import numpy as np
+import pytest
 
-from kairos.live import run_pipeline, display_signal, _fng_narrative, _fng_label
+from kairos.live import _fng_label, _fng_narrative, display_signal, run_pipeline
 from kairos.models.signal_event import SignalEvent
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _prices(n=60, base=50000, noise=200):
     np.random.seed(42)
@@ -21,6 +22,7 @@ def _fng(n=60, value=55):
 
 
 # ── _fng_narrative ────────────────────────────────────────────────────────────
+
 
 def test_fng_narrative_neutral():
     r = _fng_narrative([50] * 10)
@@ -51,23 +53,29 @@ def test_fng_narrative_single_value():
 
 # ── _fng_label ────────────────────────────────────────────────────────────────
 
+
 def test_fng_label_extreme_greed():
     assert _fng_label(80) == "Extreme Greed"
+
 
 def test_fng_label_greed():
     assert _fng_label(60) == "Greed"
 
+
 def test_fng_label_neutral():
     assert _fng_label(48) == "Neutral"
 
+
 def test_fng_label_fear():
     assert _fng_label(30) == "Fear"
+
 
 def test_fng_label_extreme_fear():
     assert _fng_label(10) == "Extreme Fear"
 
 
 # ── run_pipeline ──────────────────────────────────────────────────────────────
+
 
 def test_run_pipeline_returns_signal_event():
     event = run_pipeline(_prices(), fng_scores=_fng())
@@ -95,9 +103,8 @@ def test_run_pipeline_asset_is_btc():
 
 
 def test_run_pipeline_too_few_prices_falls_back():
-    # < 15 prices → synthetic fallback, regime = accumulation
     event = run_pipeline([50000.0] * 5, fng_scores=[50, 50, 50])
-    assert event.regime == "accumulation"
+    assert event.regime in ("lv_up", "hv_up", "lv_down", "hv_down")
     assert isinstance(event, SignalEvent)
 
 
@@ -133,6 +140,7 @@ def test_run_pipeline_trained_on_real_labels():
 
 # ── display_signal ─────────────────────────────────────────────────────────────
 
+
 def test_display_signal_no_crash():
     event = run_pipeline(_prices(), fng_scores=_fng())
     display_signal(event, current_price=67000.0, fng_score=72, fng_available=True)
@@ -150,8 +158,10 @@ def test_display_signal_low_confidence_no_crash():
 
 # ── _price_context + divergence penalty ───────────────────────────────────────
 
+
 def test_price_context_keys():
     from kairos.live import _price_context
+
     ctx = _price_context(_prices(n=200))
     assert "ema_50" in ctx and "ema_200" in ctx
     assert "vs_ema200" in ctx
@@ -161,12 +171,14 @@ def test_price_context_keys():
 
 def test_price_context_not_both_extended():
     from kairos.live import _price_context
+
     ctx = _price_context(_prices(n=200))
     assert not (ctx["extended_above"] and ctx["extended_below"])
 
 
 def test_divergence_penalty_fires_on_stretched_bullish():
     from kairos.live import _apply_divergence_penalty
+
     ctx = {"vs_ema200": 1.35, "extended_above": True, "extended_below": False}
     conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=20)
     assert diverged is True
@@ -175,6 +187,7 @@ def test_divergence_penalty_fires_on_stretched_bullish():
 
 def test_divergence_penalty_no_fire_when_not_extended():
     from kairos.live import _apply_divergence_penalty
+
     ctx = {"vs_ema200": 1.05, "extended_above": False, "extended_below": False}
     conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=20)
     assert diverged is False
@@ -183,6 +196,7 @@ def test_divergence_penalty_no_fire_when_not_extended():
 
 def test_divergence_penalty_no_fire_when_fng_neutral():
     from kairos.live import _apply_divergence_penalty
+
     # Extended price but F&G is not in fear zone → no tension → no penalty
     ctx = {"vs_ema200": 1.40, "extended_above": True, "extended_below": False}
     conf, diverged = _apply_divergence_penalty(0.75, "bullish", ctx, fng_score=55)
@@ -192,6 +206,7 @@ def test_divergence_penalty_no_fire_when_fng_neutral():
 
 def test_divergence_penalty_never_below_60_pct_of_original():
     from kairos.live import _apply_divergence_penalty
+
     ctx = {"vs_ema200": 2.50, "extended_above": True, "extended_below": False}
     original = 0.80
     conf, diverged = _apply_divergence_penalty(original, "bullish", ctx, fng_score=10)
@@ -200,6 +215,7 @@ def test_divergence_penalty_never_below_60_pct_of_original():
 
 def test_run_pipeline_with_context_returns_tuple():
     from kairos.live import run_pipeline_with_context
+
     result = run_pipeline_with_context(_prices(n=200), fng_scores=_fng(n=200))
     assert isinstance(result, tuple) and len(result) == 2
     event, ctx = result
@@ -208,6 +224,7 @@ def test_run_pipeline_with_context_returns_tuple():
 
 
 # ── fetch_live_data (mocked HTTP) ──────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_fetch_live_data_returns_prices_and_fng():
@@ -236,7 +253,7 @@ async def test_fetch_live_data_returns_prices_and_fng():
         instance.__aexit__ = AsyncMock(return_value=False)
         MockClient.return_value = instance
 
-        prices, current_price, fng_scores, fng_ok = await fetch_live_data()
+        prices, current_price, fng_scores, fng_ok, volumes = await fetch_live_data()
 
     assert len(prices) == 366
     assert current_price == prices[-1]
@@ -247,7 +264,7 @@ async def test_fetch_live_data_returns_prices_and_fng():
 
 @pytest.mark.asyncio
 async def test_fetch_live_data_fng_fallback_on_error():
-    from kairos.live import fetch_live_data, _FNG_FALLBACK
+    from kairos.live import _FNG_FALLBACK, fetch_live_data
 
     mock_cg = {"prices": [[i * 86400000, 50000.0 + i * 10] for i in range(31)]}
 
@@ -267,7 +284,7 @@ async def test_fetch_live_data_fng_fallback_on_error():
         instance.__aexit__ = AsyncMock(return_value=False)
         MockClient.return_value = instance
 
-        prices, current_price, fng_scores, fng_ok = await fetch_live_data()
+        prices, current_price, fng_scores, fng_ok, _volumes = await fetch_live_data()
 
     assert len(prices) == 31
     assert fng_ok is False

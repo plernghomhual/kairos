@@ -2,10 +2,12 @@
 
 Uses XGBoost's native binary format (not pickle) — safe to load, no code execution risk.
 """
+
 import json
+import os
 from pathlib import Path
 
-_CACHE_DIR = Path.home() / ".kairos"
+_CACHE_DIR = Path(os.getenv("KAIROS_CACHE_DIR", str(Path.home() / ".kairos")))
 
 
 def _paths(asset: str) -> tuple[Path, Path]:
@@ -14,11 +16,19 @@ def _paths(asset: str) -> tuple[Path, Path]:
     return Path(base + ".ubj"), Path(base + ".meta.json")
 
 
+def _regime_path(asset: str, regime: str) -> Path:
+    _CACHE_DIR.mkdir(exist_ok=True)
+    return _CACHE_DIR / f"model_{asset.lower()}_{regime}.ubj"
+
+
 def load_model(asset: str, n_candles: int):
     """Return a ready SignalEnsemble if cache is fresh (within 50 candles), else None."""
+    import xgboost as xgb
+
     from kairos.signals.ensemble import SignalEnsemble
-    ubj, meta = _paths(asset)
-    if not ubj.exists() or not meta.exists():
+
+    _, meta = _paths(asset)
+    if not meta.exists():
         return None
     try:
         with open(meta) as f:
@@ -27,15 +37,26 @@ def load_model(asset: str, n_candles: int):
         return None
     if abs(n_candles - m.get("n_candles", 0)) >= 50:
         return None
+    regimes = m.get("regimes", [])
+    if not regimes:
+        return None
     ensemble = SignalEnsemble()
-    ensemble._model.load_model(str(ubj))
-    ensemble._fitted = True
-    return ensemble
+    for reg in regimes:
+        path = _regime_path(asset, reg)
+        if not path.exists():
+            return None
+        model = xgb.XGBClassifier()
+        model.load_model(str(path))
+        ensemble._models[reg] = model
+        ensemble._fitted[reg] = True
+    return ensemble if ensemble._models else None
 
 
 def save_model(ensemble, asset: str, n_candles: int) -> None:
     """Persist ensemble to XGBoost native format + JSON metadata."""
-    ubj, meta = _paths(asset)
-    ensemble._model.save_model(str(ubj))
+    _, meta = _paths(asset)
+    regimes = list(ensemble._models.keys())
+    for reg, model in ensemble._models.items():
+        model.save_model(str(_regime_path(asset, reg)))
     with open(meta, "w") as f:
-        json.dump({"n_candles": n_candles, "asset": asset}, f)
+        json.dump({"n_candles": n_candles, "asset": asset, "regimes": regimes}, f)

@@ -30,15 +30,15 @@ class CausalDAG:
             p_up += 0.25
             citations.append("Shiller 2017 - Narrative Economics: narrative tipping → retail entry")
 
-        if regime == "accumulation":
+        if regime in ("lv_up", "accumulation"):
             p_up *= 1.20
             citations.append("Minsky Stage 2: quiet accumulation precedes boom")
-        elif regime == "distribution":
+        elif regime in ("hv_down", "lv_down", "distribution"):
             p_up *= 0.70
             citations.append("Minsky Stage 3-4: distribution precedes decline")
-        elif regime == "transition":
+        elif regime in ("hv_up", "transition"):
             confidence *= 0.60
-            citations.append("Soros Reflexivity: regime transition = high uncertainty")
+            citations.append("Soros Reflexivity: high-vol regime = elevated uncertainty")
 
         if anomaly_detected:
             confidence *= 0.80

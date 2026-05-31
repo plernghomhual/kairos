@@ -27,10 +27,25 @@ dependencies = [
 ]
 
 [project.scripts]
-kairos = "kairos.cli:app"
+kairos = "kairos.cli:run_cli"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "httpx>=0.27.0"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# N803/N806: ML convention — uppercase X for feature matrices is standard
+# N814: CamelCase alias used as module-level constant (_SE = SignalEvent)
+# E741: ambiguous `l` — pre-existing, not our code
+# F841: unused local vars — pre-existing
+# E712: bool comparisons in tests — pre-existing style
+# E402: regime.py sets env var before imports (intentional)
+ignore = ["N803", "N806", "N814", "E741", "F841", "E712", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E712"]

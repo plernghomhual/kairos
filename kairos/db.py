@@ -1,4 +1,5 @@
 import json
+from dataclasses import fields
 from datetime import datetime, timezone
 
 import duckdb
@@ -8,6 +9,16 @@ from kairos.models.signal_event import SignalEvent
 
 def get_connection(db_path: str = "kairos.db") -> duckdb.DuckDBPyConnection:
     return duckdb.connect(db_path)
+
+
+def _feature_store_columns() -> str:
+    from kairos.signals.ensemble import FeatureVector
+
+    cols = []
+    for f in fields(FeatureVector):
+        sql_type = "BOOLEAN" if f.name == "narrative_tipping_point" else "DOUBLE"
+        cols.append(f"    {f.name} {sql_type}")
+    return ",\n".join(cols)
 
 
 def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -77,6 +88,61 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS outcome VARCHAR")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_ts ON signal_events (asset, triggered_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_asset_outcome ON signal_events (asset, outcome)")
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS feature_store (
+            asset   VARCHAR,
+            ts      TIMESTAMP,
+{_feature_store_columns()},
+            metadata VARCHAR,
+            PRIMARY KEY (asset, ts)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sentiment_cache (
+            source      VARCHAR,
+            asset       VARCHAR,
+            raw_data    JSON,
+            fetched_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (source, asset)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS exchange_wallets (
+            address VARCHAR PRIMARY KEY,
+            exchange VARCHAR,
+            label   VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS whale_transfers (
+            signature   VARCHAR PRIMARY KEY,
+            mint        VARCHAR,
+            from_wallet VARCHAR,
+            to_wallet   VARCHAR,
+            usd_value   DOUBLE,
+            direction   VARCHAR,
+            slot        BIGINT,
+            block_time  VARCHAR,
+            detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS paper_trades (
+            asset           VARCHAR,
+            signal_id       VARCHAR,
+            direction       VARCHAR,
+            entry_price     DOUBLE,
+            entry_time      TIMESTAMP,
+            size            DOUBLE,
+            exit_price      DOUBLE,
+            exit_time       TIMESTAMP,
+            pnl_pct         DOUBLE,
+            closed          BOOLEAN DEFAULT FALSE,
+            signal_confidence DOUBLE,
+            signal_regime   VARCHAR,
+            PRIMARY KEY (signal_id, asset)
+        )
+    """)
 
 
 def save_signal(
@@ -181,10 +247,20 @@ def get_signal_history(
     ).fetchall()
 
     columns = [
-        "id", "asset", "direction", "confidence", "regime",
-        "narrative_velocity", "narrative_tipping_point", "mechanism",
-        "estimated_hours", "citations", "triggered_at",
-        "price_at_signal", "price_at_expiry", "outcome",
+        "id",
+        "asset",
+        "direction",
+        "confidence",
+        "regime",
+        "narrative_velocity",
+        "narrative_tipping_point",
+        "mechanism",
+        "estimated_hours",
+        "citations",
+        "triggered_at",
+        "price_at_signal",
+        "price_at_expiry",
+        "outcome",
     ]
     return [dict(zip(columns, row)) for row in rows]
 

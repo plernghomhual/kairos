@@ -1,12 +1,12 @@
 import numpy as np
-import pytest
-from kairos.signals.kalman import kalman_smooth
+
+from kairos.models.signal_event import SignalEvent
 from kairos.signals.anomaly import detect_anomalies
+from kairos.signals.causal import CausalDAG
+from kairos.signals.ensemble import FeatureVector, SignalEnsemble
+from kairos.signals.kalman import kalman_smooth
 from kairos.signals.narrative import compute_narrative_features
 from kairos.signals.regime import fit_regime_model, predict_regime
-from kairos.signals.causal import CausalDAG
-from kairos.signals.ensemble import SignalEnsemble, FeatureVector
-from kairos.models.signal_event import SignalEvent
 
 
 def test_full_pipeline_produces_signal_event():
@@ -25,10 +25,12 @@ def test_full_pipeline_produces_signal_event():
     narrative = compute_narrative_features(post_counts)
 
     # Layer 3: Regime
-    regime_features = np.column_stack([
-        np.random.normal(0.001, 0.005, 100),
-        np.random.normal(0.005, 0.001, 100),
-    ])
+    regime_features = np.column_stack(
+        [
+            np.random.normal(0.001, 0.005, 100),
+            np.random.normal(0.005, 0.001, 100),
+        ]
+    )
     model = fit_regime_model(regime_features)
     regime = predict_regime(model, regime_features[-5:])
 
@@ -49,21 +51,17 @@ def test_full_pipeline_produces_signal_event():
         narrative_velocity=narrative["narrative_velocity"],
         narrative_tipping_point=narrative["narrative_tipping_point"],
         saturation=narrative["saturation"],
-        regime_accumulation=1.0 if regime == "accumulation" else 0.0,
-        regime_distribution=1.0 if regime == "distribution" else 0.0,
-        regime_transition=1.0 if regime == "transition" else 0.0,
+        regime_lv_up=1.0 if regime == "lv_up" else 0.0,
+        regime_hv_up=1.0 if regime == "hv_up" else 0.0,
+        regime_lv_down=1.0 if regime == "lv_down" else 0.0,
+        regime_hv_down=1.0 if regime == "hv_down" else 0.0,
         causal_bullish=causal["bullish"],
         causal_confidence=causal["confidence"],
         macro_dff=0.25,
     )
 
     ensemble = SignalEnsemble()
-    training_fvs = [
-        FeatureVector(0.01, 1.0, 0.0, 2.0, True, 0.1, 1.0, 0.0, 0.0, 0.7, 0.9, 0.25)
-    ] * 40 + [
-        FeatureVector(-0.01, -1.0, 0.1, 0.1, False, 0.5, 0.0, 1.0, 0.0, 0.3, 0.7, 0.5)
-    ] * 40
-    ensemble.fit(training_fvs)
+    ensemble.fit_synthetic_fallback()
 
     event = ensemble.predict("BTC", fv, citations=causal["citations"], regime=regime)
 

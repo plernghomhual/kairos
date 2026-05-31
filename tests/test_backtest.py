@@ -1,5 +1,4 @@
-import pytest
-from kairos.backtest.runner import BacktestResult, evaluate_hit_rate
+from kairos.backtest.runner import HitRateResult, evaluate_hit_rate
 
 
 def test_hit_rate_calculation():
@@ -18,7 +17,7 @@ def test_hit_rate_calculation():
     actuals = [True, True, True, True, True, True, True, False, False, False]
 
     result = evaluate_hit_rate(signals, actuals)
-    assert isinstance(result, BacktestResult)
+    assert isinstance(result, HitRateResult)
     assert result.total == 10
     assert result.hits == 7
     assert abs(result.hit_rate - 0.7) < 0.001

@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  kairos:
+    build: .
+    container_name: kairos
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./kairos.db:/kairos/kairos.db
+    environment:
+      KAIROS_DB_PATH: /kairos/kairos.db
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
+    command: ["kairos", "--asset", "BTC", "--no-tui"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

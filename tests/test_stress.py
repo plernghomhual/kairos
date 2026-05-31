@@ -1,21 +1,21 @@
 """
 Stress tests: edge cases, adversarial inputs, invariant checks.
 """
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from kairos.signals.kalman import kalman_smooth
-from kairos.signals.anomaly import detect_anomalies
-from kairos.signals.narrative import compute_narrative_features
-from kairos.signals.regime import fit_regime_model, predict_regime
-from kairos.signals.causal import CausalDAG
-from kairos.signals.ensemble import SignalEnsemble, FeatureVector
-from kairos.backtest.runner import evaluate_hit_rate
 from kairos.api.server import create_app
-
+from kairos.backtest.runner import evaluate_hit_rate
+from kairos.signals.anomaly import detect_anomalies
+from kairos.signals.causal import CausalDAG
+from kairos.signals.ensemble import FeatureVector, SignalEnsemble
+from kairos.signals.kalman import kalman_smooth
+from kairos.signals.narrative import compute_narrative_features
 
 # ── Kalman ────────────────────────────────────────────────────────────────────
+
 
 def test_kalman_empty_returns_empty():
     r = kalman_smooth(np.array([]))
@@ -54,6 +54,7 @@ def test_kalman_preserves_length():
 
 # ── Anomaly ───────────────────────────────────────────────────────────────────
 
+
 def test_anomaly_single_sample():
     r = detect_anomalies(np.array([[1.0, 2.0]]))
     assert len(r) == 1
@@ -88,6 +89,7 @@ def test_anomaly_contamination_rate():
 
 
 # ── Narrative ─────────────────────────────────────────────────────────────────
+
 
 def test_narrative_empty_no_crash():
     r = compute_narrative_features([])
@@ -126,6 +128,7 @@ def test_narrative_tipping_point_triggers():
 
 # ── Causal DAG ────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def dag():
     return CausalDAG()
@@ -141,9 +144,9 @@ def test_causal_bullish_plus_bearish_equals_one(dag):
     ]
     for ntp, regime, anom, macro in combos:
         r = dag.infer_price_impact(ntp, regime, anom, macro)
-        assert round(r["bullish"] + r["bearish"], 4) == 1.0, (
-            f"bullish+bearish != 1.0 for {ntp},{regime},{anom},{macro}: {r}"
-        )
+        assert (
+            round(r["bullish"] + r["bearish"], 4) == 1.0
+        ), f"bullish+bearish != 1.0 for {ntp},{regime},{anom},{macro}: {r}"
 
 
 def test_causal_confidence_in_range(dag):
@@ -179,17 +182,19 @@ def test_causal_anomaly_reduces_confidence(dag):
 
 # ── Ensemble ──────────────────────────────────────────────────────────────────
 
+
 def _fv(bullish: bool = True) -> FeatureVector:
     return FeatureVector(
         kalman_slope=0.02 if bullish else -0.02,
         volume_z_score=1.5 if bullish else -1.5,
         anomaly_score=0.1,
-        narrative_velocity=2.3 if bullish else 0.1,
+        narrative_velocity=0.5 if bullish else 0.1,
         narrative_tipping_point=bullish,
         saturation=0.15,
-        regime_accumulation=1.0 if bullish else 0.0,
-        regime_distribution=0.0 if bullish else 1.0,
-        regime_transition=0.0,
+        regime_lv_up=1.0 if bullish else 0.0,
+        regime_hv_up=0.0,
+        regime_lv_down=0.0 if bullish else 1.0,
+        regime_hv_down=0.0,
         causal_bullish=0.75 if bullish else 0.25,
         causal_confidence=0.85,
         macro_dff=0.25,
@@ -231,18 +236,16 @@ def test_ensemble_direction_valid(fitted_ensemble):
 
 
 def test_ensemble_hours_within_bounds(fitted_ensemble):
-    # Quiet accumulation → moderate estimate within valid range
-    fv = FeatureVector(0.01, 0.5, 0.0, 0.0, True, 0.1, 1.0, 0.0, 0.0, 0.7, 0.9, 0.25)
+    fv = FeatureVector(0.01, 0.5, 0.0, 0.0, True, 0.1, 1.0, 0.0, 0.0, 0.0, 0.7, 0.9, 0.25)
     ev = fitted_ensemble.predict("BTC", fv, citations=[])
     assert 12.0 <= ev.estimated_hours <= 168.0
 
 
 def test_ensemble_transition_anomaly_hours_shorter(fitted_ensemble):
-    # Transition + anomaly + high vol → faster than quiet accumulation
-    fv_quiet = FeatureVector(0.01, 0.5, 0.0, 0.0, False, 0.1, 1.0, 0.0, 0.0, 0.7, 0.9, 0.25)
-    fv_hot = FeatureVector(0.05, 2.0, 1.0, 0.5, True, 0.1, 0.0, 0.0, 1.0, 0.8, 0.9, 0.25)
-    ev_quiet = fitted_ensemble.predict("BTC", fv_quiet, citations=[], regime="accumulation")
-    ev_hot = fitted_ensemble.predict("BTC", fv_hot, citations=[], regime="transition")
+    fv_quiet = FeatureVector(0.01, 0.5, 0.0, 0.0, False, 0.1, 1.0, 0.0, 0.0, 0.0, 0.7, 0.9, 0.25)
+    fv_hot = FeatureVector(0.05, 2.0, 1.0, 0.5, True, 0.1, 0.0, 0.0, 1.0, 0.0, 0.8, 0.9, 0.25)
+    ev_quiet = fitted_ensemble.predict("BTC", fv_quiet, citations=[], regime="lv_up")
+    ev_hot = fitted_ensemble.predict("BTC", fv_hot, citations=[], regime="hv_up")
     assert ev_hot.estimated_hours < ev_quiet.estimated_hours
 
 
@@ -292,10 +295,11 @@ def test_ensemble_is_stale_custom_threshold():
     e = SignalEnsemble()
     e.fit_raw(np.zeros((10, 5)), np.array([0, 1] * 5), candle_count=100)
     assert e.is_stale(110, max_growth=50) == False  # only +10
-    assert e.is_stale(160, max_growth=50) == True   # +60 > 50
+    assert e.is_stale(160, max_growth=50) == True  # +60 > 50
 
 
 # ── Backtest ──────────────────────────────────────────────────────────────────
+
 
 def _sig():
     return {"direction": "bullish", "triggered_at": "2021-01-01", "estimated_hours": 36}
@@ -339,11 +343,14 @@ def test_backtest_length_mismatch_raises():
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def api_client(tmp_path_factory):
     db = str(tmp_path_factory.mktemp("db") / "stress.db")
     import duckdb
+
     from kairos.db import create_schema
+
     conn = duckdb.connect(db)
     create_schema(conn)
     conn.close()

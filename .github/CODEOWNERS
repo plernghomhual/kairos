@@ -1,0 +1,19 @@
+# Default
+* @plernghomhual
+
+# Signal/ML core - owned by Agents 6, 7, 10
+kairos/signals/ensemble.py @plernghomhual
+kairos/signals/regime.py @plernghomhual
+kairos/signals/causal.py @plernghomhual
+
+# Data pipeline - owned by Agents 1-5, 11
+kairos/ingest/ @plernghomhual
+kairos/live.py @plernghomhual
+
+# Infrastructure - owned by Agents 12-15, 18
+kairos/backtest/ @plernghomhual
+kairos/cli.py @plernghomhual
+Dockerfile @plernghomhual
+
+# Tests - owned by Agent 17
+tests/ @plernghomhual

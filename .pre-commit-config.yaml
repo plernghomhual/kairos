@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.0
+    hooks:
+      - id: ruff
+        args: [--fix, --select, "E,W,F,I,N", --ignore, "N803,N806,N814,E741,F841,E712,E402"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest-quick
+        name: pytest (fast tests)
+        entry: python -m pytest tests/ -q --tb=short -k "not backtest and not integration"
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: check-uncommitted-models
+        name: check for stale .ubj files
+        entry: bash -c '! git diff --name-only --cached -- "*.ubj" | grep -q . && ! git diff --name-only -- "*.ubj" | grep -q .'
+        language: system
+        pass_filenames: false
+        always_run: true

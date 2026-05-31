@@ -2,7 +2,9 @@
 Live data fetching + pipeline runner + display.
 No API keys needed — CoinGecko free tier + alternative.me Fear & Greed Index.
 """
+
 import asyncio
+import threading
 
 import httpx
 import numpy as np
@@ -10,15 +12,18 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from kairos.signals.kalman import kalman_smooth
-from kairos.signals.anomaly import detect_anomalies
-from kairos.signals.regime import fit_regime_model, predict_regime
-from kairos.signals.causal import CausalDAG
-from kairos.signals.ensemble import SignalEnsemble, FeatureVector
-from kairos.models.signal_event import SignalEvent
 from kairos.model_cache import load_model, save_model
+from kairos.models.signal_event import SignalEvent
+from kairos.signals.anomaly import detect_anomalies
+from kairos.signals.causal import CausalDAG
+from kairos.signals.ensemble import FeatureVector, SignalEnsemble
+from kairos.signals.kalman import kalman_smooth
+from kairos.signals.regime import fit_regime_model, predict_regime
 
 console = Console()
+
+_PAPER_TRADING_ENGINE = None  # set at startup or in tests
+_PAPER_ENGINE_LOCK = threading.Lock()
 
 _FNG = "https://api.alternative.me/fng/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; kairos-signal-engine/0.1; +https://github.com/kairos)"}
@@ -27,7 +32,9 @@ _FNG_FALLBACK = [50] * 30  # neutral when API unavailable
 _ASSET_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
 
 
-async def _fetch_prices(client: httpx.AsyncClient, days: int = 365, coin_id: str = "bitcoin") -> tuple[list[float], float]:
+async def _fetch_prices(
+    client: httpx.AsyncClient, days: int = 365, coin_id: str = "bitcoin"
+) -> tuple[list[float], float, list[float]]:
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     resp = await client.get(
         url,
@@ -35,8 +42,10 @@ async def _fetch_prices(client: httpx.AsyncClient, days: int = 365, coin_id: str
         headers=_HEADERS,
     )
     resp.raise_for_status()
-    prices = [p[1] for p in resp.json()["prices"]]
-    return prices, prices[-1]
+    data = resp.json()
+    prices = [p[1] for p in data["prices"]]
+    volumes = [v[1] for v in data.get("total_volumes", [])]
+    return prices, prices[-1], volumes
 
 
 async def _fetch_fng(client: httpx.AsyncClient, days: int = 365) -> tuple[list[int], bool]:
@@ -51,14 +60,16 @@ async def _fetch_fng(client: httpx.AsyncClient, days: int = 365) -> tuple[list[i
         data = resp.json()["data"]
         scores = [int(d["value"]) for d in reversed(data)]  # API returns newest first
         return scores, True
-    except (httpx.HTTPStatusError, httpx.RequestError, KeyError, ValueError):
+    except Exception:
         return _FNG_FALLBACK, False
 
 
-async def fetch_live_data(asset: str = "BTC") -> tuple[list[float], float, list[int], bool]:
+async def fetch_live_data(
+    asset: str = "BTC",
+) -> tuple[list[float], float, list[int], bool, list[float]]:
     """Fetch prices + Fear & Greed index concurrently. No API keys needed.
 
-    Returns: (prices, current_price, fng_scores, fng_available)
+    Returns: (prices, current_price, fng_scores, fng_available, volumes)
     Raises ValueError for unsupported assets.
     """
     if asset not in _ASSET_IDS:
@@ -67,14 +78,14 @@ async def fetch_live_data(asset: str = "BTC") -> tuple[list[float], float, list[
     async with httpx.AsyncClient(timeout=20.0) as client:
         prices_task = asyncio.create_task(_fetch_prices(client, coin_id=coin_id))
         fng_task = asyncio.create_task(_fetch_fng(client))
-        prices, current_price = await prices_task
+        prices, current_price, volumes = await prices_task
         fng_scores, fng_ok = await fng_task
-    return prices, current_price, fng_scores, fng_ok
+    return prices, current_price, fng_scores, fng_ok, volumes
 
 
 def _fng_narrative(fng_scores: list[int]) -> dict:
     """Compute narrative features from Fear & Greed scores."""
-    arr = np.array(fng_scores, dtype=float)
+    arr = np.clip(np.array(fng_scores, dtype=float), 0.0, 100.0)
     current = arr[-1] / 100.0
     recent = arr[-7:] if len(arr) >= 7 else arr
     velocity = float(np.polyfit(range(len(recent)), recent, 1)[0]) / 100.0 if len(recent) >= 2 else 0.0
@@ -109,8 +120,8 @@ def _price_context(prices: list[float]) -> dict:
         "ema_200": round(ema200, 2),
         "vs_ema200": round(vs_ema200, 3),
         "vs_ema50": round(vs_ema50, 3),
-        "extended_above": vs_ema200 > 1.15,   # >15% above long-term trend
-        "extended_below": vs_ema200 < 0.85,   # >15% below long-term trend
+        "extended_above": vs_ema200 > 1.15,  # >15% above long-term trend
+        "extended_below": vs_ema200 < 0.85,  # >15% below long-term trend
     }
 
 
@@ -146,10 +157,14 @@ def _apply_divergence_penalty(
 
 
 def _fng_label(score: int) -> str:
-    if score >= 75: return "Extreme Greed"
-    if score >= 55: return "Greed"
-    if score >= 45: return "Neutral"
-    if score >= 25: return "Fear"
+    if score >= 75:
+        return "Extreme Greed"
+    if score >= 55:
+        return "Greed"
+    if score >= 45:
+        return "Neutral"
+    if score >= 25:
+        return "Fear"
     return "Extreme Fear"
 
 
@@ -170,29 +185,34 @@ def _build_training_data(
 
     X_rows, y_labels = [], []
     for t in range(10, n - 2):
-        slope = float(np.polyfit(range(10), smoothed[t - 10:t], 1)[0])
+        slope = float(np.polyfit(range(10), smoothed[t - 10 : t], 1)[0])
         vz = float(vol_z_arr[t])
         anom = float(anomaly_flags[t])
 
         fng_idx = min(t, len(fng_arr) - 1)
         fng_cur = fng_arr[fng_idx] / 100.0
-        fw = fng_arr[max(0, fng_idx - 7):fng_idx + 1]
+        fw = fng_arr[max(0, fng_idx - 7) : fng_idx + 1]
         fng_vel = float(np.polyfit(range(len(fw)), fw, 1)[0]) / 100.0 if len(fw) >= 2 else 0.0
         fng_tip = bool(fng_cur > 0.5 and fng_vel > 0.02)
 
-        rf_t = regime_feats[max(0, t - 6):t]
-        reg = predict_regime(hmm, rf_t) if len(rf_t) >= 2 else "accumulation"
+        rf_t = regime_feats[max(0, t - 6) : t]
+        reg = predict_regime(hmm, rf_t) if len(rf_t) >= 2 else "lv_up"
 
         causal = CausalDAG().infer_price_impact(fng_tip, reg, bool(anom), False)
 
         fv = FeatureVector(
-            kalman_slope=slope, volume_z_score=vz, anomaly_score=anom,
-            narrative_velocity=max(fng_vel, 0.0), narrative_tipping_point=fng_tip,
+            kalman_slope=slope,
+            volume_z_score=vz,
+            anomaly_score=anom,
+            narrative_velocity=max(fng_vel, 0.0),
+            narrative_tipping_point=fng_tip,
             saturation=fng_cur,
-            regime_accumulation=1.0 if reg == "accumulation" else 0.0,
-            regime_distribution=1.0 if reg == "distribution" else 0.0,
-            regime_transition=1.0 if reg == "transition" else 0.0,
-            causal_bullish=causal["bullish"], causal_confidence=causal["confidence"],
+            regime_lv_up=1.0 if reg == "lv_up" else 0.0,
+            regime_hv_up=1.0 if reg == "hv_up" else 0.0,
+            regime_lv_down=1.0 if reg == "lv_down" else 0.0,
+            regime_hv_down=1.0 if reg == "hv_down" else 0.0,
+            causal_bullish=causal["bullish"],
+            causal_confidence=causal["confidence"],
             macro_dff=0.25,
         )
         # Real label: was price higher 2 days later? No leakage.
@@ -202,11 +222,37 @@ def _build_training_data(
     return np.vstack(X_rows), np.array(y_labels)
 
 
-def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC") -> SignalEvent:
+def run_pipeline(
+    prices: list[float],
+    fng_scores: list[int],
+    asset: str = "BTC",
+    volumes: list[float] | None = None,
+) -> SignalEvent:
     """Run full 3-layer causal pipeline on real data. Returns a SignalEvent."""
     if not fng_scores:
         fng_scores = list(_FNG_FALLBACK)
+    if not prices:
+        from kairos.models.signal_event import SignalEvent as _SE
+
+        return _SE(
+            asset=asset,
+            direction="neutral",
+            confidence=0.5,
+            regime="lv_up",
+            narrative_velocity=0.0,
+            narrative_tipping_point=False,
+            mechanism="No price data available",
+            estimated_hours=24.0,
+            citations=[],
+        )
     arr = np.array(prices, dtype=float)
+    # Interpolate non-finite values so downstream math doesn't propagate NaN/Inf
+    if not np.isfinite(arr).all():
+        finite_idx = np.where(np.isfinite(arr))[0]
+        if len(finite_idx) >= 2:
+            arr = np.interp(np.arange(len(arr)), finite_idx, arr[finite_idx])
+        else:
+            arr = np.where(np.isfinite(arr), arr, 1.0)
 
     # Layer 1 — Reality: Kalman smooth + anomaly detection
     smoothed = kalman_smooth(arr)
@@ -224,18 +270,22 @@ def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC")
     vol_z = float(vol_z_arr[-1])
 
     # Layer 2 — Narrative: Fear & Greed index
+    if not fng_scores:
+        fng_scores = [50] * 30
     narrative = _fng_narrative(fng_scores)
 
     # Layer 3 — Regime: HMM on full price history
     returns = np.diff(smoothed) / (smoothed[:-1] + 1e-8)
     volatility = np.abs(returns)
     regime_feats = np.column_stack([returns, volatility])
-    if len(regime_feats) >= 10:
-        hmm = fit_regime_model(regime_feats)
-        regime = predict_regime(hmm, regime_feats[-5:])
+    finite_mask = np.isfinite(regime_feats).all(axis=1)
+    regime_feats_clean = regime_feats[finite_mask]
+    if len(regime_feats_clean) >= 10:
+        hmm = fit_regime_model(regime_feats_clean)
+        regime = predict_regime(hmm, regime_feats_clean[-5:])
     else:
         hmm = None
-        regime = "accumulation"
+        regime = "lv_up"
 
     # Causal DAG
     causal = CausalDAG().infer_price_impact(
@@ -246,14 +296,18 @@ def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC")
     )
 
     fv = FeatureVector(
-        kalman_slope=slope, volume_z_score=vol_z, anomaly_score=anomaly_score,
+        kalman_slope=slope,
+        volume_z_score=vol_z,
+        anomaly_score=anomaly_score,
         narrative_velocity=narrative["narrative_velocity"],
         narrative_tipping_point=narrative["narrative_tipping_point"],
         saturation=narrative["saturation"],
-        regime_accumulation=1.0 if regime == "accumulation" else 0.0,
-        regime_distribution=1.0 if regime == "distribution" else 0.0,
-        regime_transition=1.0 if regime == "transition" else 0.0,
-        causal_bullish=causal["bullish"], causal_confidence=causal["confidence"],
+        regime_lv_up=1.0 if regime == "lv_up" else 0.0,
+        regime_hv_up=1.0 if regime == "hv_up" else 0.0,
+        regime_lv_down=1.0 if regime == "lv_down" else 0.0,
+        regime_hv_down=1.0 if regime == "hv_down" else 0.0,
+        causal_bullish=causal["bullish"],
+        causal_confidence=causal["confidence"],
         macro_dff=0.25,
     )
 
@@ -263,7 +317,15 @@ def run_pipeline(prices: list[float], fng_scores: list[int], asset: str = "BTC")
         ensemble = SignalEnsemble()
         if hmm is not None and len(arr) > 15:
             try:
-                X, y = _build_training_data(prices, fng_scores, smoothed, anomaly_flags, vol_z_arr, hmm, regime_feats)
+                X, y = _build_training_data(
+                    prices,
+                    fng_scores,
+                    smoothed,
+                    anomaly_flags,
+                    vol_z_arr,
+                    hmm,
+                    regime_feats_clean,
+                )
                 if len(set(y.tolist())) >= 2:
                     ensemble.fit_raw(X, y)
                 else:
@@ -285,13 +347,90 @@ def run_pipeline_with_context(
 ) -> tuple[SignalEvent, dict]:
     """Same as run_pipeline() but also returns price context (EMA, divergence)."""
     event = run_pipeline(prices, fng_scores, asset=asset)
-    ctx = _price_context(prices)
+    ctx = _price_context(prices) if prices else {}
     adjusted_conf, diverged = _apply_divergence_penalty(
         event.confidence, event.direction, ctx, fng_scores[-1] if fng_scores else 50
     )
     event.confidence = adjusted_conf
     ctx["divergence_applied"] = diverged
+    if _PAPER_TRADING_ENGINE is not None and prices:
+        with _PAPER_ENGINE_LOCK:
+            try:
+                _PAPER_TRADING_ENGINE.process_signal(event, current_price=prices[-1])
+                ctx["paper_account"] = _PAPER_TRADING_ENGINE.get_account(asset)
+            except Exception:
+                pass
     return event, ctx
+
+
+async def safe_fetch_code_velocity() -> dict:
+    """Wrap fetch_code_velocity with key normalization."""
+    import kairos.ingest as ingest
+
+    raw = await ingest.fetch_code_velocity()
+    if not raw.get("available"):
+        return {"available": False}
+    return {
+        "available": True,
+        "commit_velocity": raw.get("commits", 0),
+        "contributors": raw.get("contributors", 0),
+        "merged_prs": raw.get("pull_requests", 0),
+        "stars": raw.get("stars", 0),
+        "forks": raw.get("forks", 0),
+        "churn": raw.get("churn", 0.0),
+        "repos_scraped": raw.get("repos", []),
+    }
+
+
+async def safe_fetch_whale_flows() -> dict:
+    """Wrap fetch_whale_flows with safe fallback."""
+    import kairos.ingest as ingest
+
+    return await ingest.fetch_whale_flows()
+
+
+class DataFetchSupervisor:
+    """Parallel multi-source data fetcher with per-source fault isolation."""
+
+    def __init__(self, max_retries: int = 3) -> None:
+        self.max_retries = max_retries
+
+    async def _fetch_prices_source(self, asset: str) -> dict:
+        coin_id = _ASSET_IDS.get(asset, "bitcoin")
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            prices, current_price, volumes = await _fetch_prices(client, coin_id=coin_id)
+        return {"prices": prices, "current_price": current_price, "volumes": volumes}
+
+    async def _fetch_fng_source(self, asset: str) -> dict:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            scores, ok = await _fetch_fng(client)
+        return {"scores": scores, "available": ok}
+
+    async def _fetch_github_source(self, asset: str) -> dict:
+        return await safe_fetch_code_velocity()
+
+    async def _fetch_whale_source(self, asset: str) -> dict:
+        return await safe_fetch_whale_flows()
+
+    async def _fetch_macro_source(self, asset: str) -> dict:
+        return {"available": False}
+
+    async def _run_source(self, name: str, asset: str) -> tuple[str, dict]:
+        source_fn = getattr(self, f"_fetch_{name}_source")
+        last_exc: Exception | None = None
+        for _ in range(max(self.max_retries, 1)):
+            try:
+                result = await source_fn(asset)
+                return name, {"available": True, "data": result}
+            except Exception as exc:
+                last_exc = exc
+        return name, {"available": False, "error": str(last_exc)}
+
+    async def fetch_all(self, asset: str = "BTC") -> dict:
+        sources = ["prices", "fng", "github", "whale", "macro"]
+        tasks = [self._run_source(name, asset) for name in sources]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
 
 
 def display_signal(
@@ -315,9 +454,10 @@ def display_signal(
     time_str = f"{h:.0f} hours" if h < 48 else f"{h / 24:.1f} days"
 
     regime_plain = {
-        "accumulation": "Smart money quietly buying (calm before the pump)",
-        "distribution": "People selling into strength (watch out)",
-        "transition":   "Market changing direction (anything can happen)",
+        "lv_up": "Low volatility uptrend (smart money quietly buying)",
+        "hv_up": "High volatility rally (strong momentum, watch for reversal)",
+        "lv_down": "Low volatility decline (distribution, watch out)",
+        "hv_down": "High volatility selloff (panic, possible capitulation opportunity)",
     }.get(event.regime, event.regime)
 
     fng_text = f"{_fng_label(fng_score)} ({fng_score}/100)"
@@ -355,17 +495,17 @@ def display_signal(
     t.append(f"  —  {conf_pct}% sure\n", style="dim")
     t.append(f"\n  {event.asset} right now:  ", style="dim")
     t.append(f"${current_price:,.0f}\n", style="bold white")
-    t.append(f"  Market phase:   ", style="dim")
+    t.append("  Market phase:   ", style="dim")
     t.append(f"{regime_plain}\n", style="white")
-    t.append(f"  Sentiment:      ", style="dim")
+    t.append("  Sentiment:      ", style="dim")
     t.append(f"{fng_text}\n", style="white")
-    t.append(f"  Confidence:     ", style="dim")
+    t.append("  Confidence:     ", style="dim")
     t.append(f"[{bar}] {conf_pct}%\n", style=color)
-    t.append(f"  Move expected:  ", style="dim")
+    t.append("  Move expected:  ", style="dim")
     t.append(f"within ~{time_str}\n", style="yellow")
 
     if plain_reasons:
-        t.append(f"\n  Why this signal:\n", style="bold dim")
+        t.append("\n  Why this signal:\n", style="bold dim")
         for r in plain_reasons:
             t.append(f"    • {r}\n", style="white")
 
@@ -386,25 +526,32 @@ def display_signal(
             )
         if price_context.get("divergence_applied"):
             t.append(
-                f"  ⚠  Confidence reduced: price and sentiment are"
-                f" pointing in different directions\n",
+                "  ⚠  Confidence reduced: price and sentiment are" " pointing in different directions\n",
                 style="yellow",
             )
 
     if event.narrative_tipping_point:
-        t.append(f"\n  ⚡ Sentiment tipping point — fear/greed shifting fast\n", style="bold yellow")
+        t.append(
+            "\n  ⚡ Sentiment tipping point — fear/greed shifting fast\n",
+            style="bold yellow",
+        )
 
     if conf_pct < 55:
-        t.append(f"\n  ⚠  Low confidence — market signal is weak, be careful\n", style="yellow")
+        t.append(
+            "\n  ⚠  Low confidence — market signal is weak, be careful\n",
+            style="yellow",
+        )
 
     if not fng_available:
-        t.append(f"\n  ℹ  Sentiment API unavailable — using neutral baseline\n", style="dim")
+        t.append("\n  ℹ  Sentiment API unavailable — using neutral baseline\n", style="dim")
 
-    t.append(f"\n", style="")
+    t.append("\n", style="")
 
-    console.print(Panel(
-        t,
-        title=f"[bold white]KAIROS  ·  {event.asset} Live Signal[/bold white]",
-        border_style=color,
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            t,
+            title=f"[bold white]KAIROS  ·  {event.asset} Live Signal[/bold white]",
+            border_style=color,
+            padding=(0, 2),
+        )
+    )
