@@ -1,8 +1,8 @@
 """Tests for signal history persistence and hit-rate tracking."""
+
 from datetime import datetime, timezone
 
 import duckdb
-import pytest
 
 from kairos.db import (
     create_schema,
@@ -38,6 +38,7 @@ def _make_conn() -> duckdb.DuckDBPyConnection:
 # test_save_and_retrieve_signal
 # ---------------------------------------------------------------------------
 
+
 def test_save_and_retrieve_signal():
     conn = _make_conn()
     event = _make_event(direction="bullish")
@@ -56,6 +57,7 @@ def test_save_and_retrieve_signal():
 # test_resolve_correct_bullish
 # ---------------------------------------------------------------------------
 
+
 def test_resolve_correct_bullish():
     conn = _make_conn()
     # Insert directly so triggered_at is in the past and the signal is expired
@@ -68,9 +70,20 @@ def test_resolve_correct_bullish():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """,
-        ["id-bull-correct", "BTC", "bullish", 0.8, "accumulation",
-         0.5, False, "test", 1, "[]", "2020-01-01 00:00:00",
-         40_000.0],
+        [
+            "id-bull-correct",
+            "BTC",
+            "bullish",
+            0.8,
+            "accumulation",
+            0.5,
+            False,
+            "test",
+            1,
+            "[]",
+            "2020-01-01 00:00:00",
+            40_000.0,
+        ],
     )
     resolved = resolve_expired_signals(conn, "BTC", current_price=45_000.0)
     assert resolved == 1
@@ -81,6 +94,7 @@ def test_resolve_correct_bullish():
 # ---------------------------------------------------------------------------
 # test_resolve_correct_bearish
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_correct_bearish():
     conn = _make_conn()
@@ -93,9 +107,20 @@ def test_resolve_correct_bearish():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """,
-        ["id-bear-correct", "BTC", "bearish", 0.8, "distribution",
-         0.5, False, "test", 1, "[]", "2020-01-01 00:00:00",
-         40_000.0],
+        [
+            "id-bear-correct",
+            "BTC",
+            "bearish",
+            0.8,
+            "distribution",
+            0.5,
+            False,
+            "test",
+            1,
+            "[]",
+            "2020-01-01 00:00:00",
+            40_000.0,
+        ],
     )
     resolved = resolve_expired_signals(conn, "BTC", current_price=35_000.0)
     assert resolved == 1
@@ -106,6 +131,7 @@ def test_resolve_correct_bearish():
 # ---------------------------------------------------------------------------
 # test_resolve_incorrect
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_incorrect():
     conn = _make_conn()
@@ -118,9 +144,20 @@ def test_resolve_incorrect():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """,
-        ["id-bull-wrong", "BTC", "bullish", 0.6, "transition",
-         0.3, False, "test", 1, "[]", "2020-01-01 00:00:00",
-         50_000.0],
+        [
+            "id-bull-wrong",
+            "BTC",
+            "bullish",
+            0.6,
+            "transition",
+            0.3,
+            False,
+            "test",
+            1,
+            "[]",
+            "2020-01-01 00:00:00",
+            50_000.0,
+        ],
     )
     resolved = resolve_expired_signals(conn, "BTC", current_price=45_000.0)
     assert resolved == 1
@@ -131,6 +168,7 @@ def test_resolve_incorrect():
 # ---------------------------------------------------------------------------
 # test_hit_rate_calculation — 3 correct + 1 incorrect → 0.75
 # ---------------------------------------------------------------------------
+
 
 def test_hit_rate_calculation():
     conn = _make_conn()
@@ -144,9 +182,22 @@ def test_hit_rate_calculation():
                 price_at_signal, price_at_expiry, outcome
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [f"id-{i}", "BTC", "bullish", 0.7, "accumulation",
-             0.4, False, "test", 1, "[]", "2020-01-01 00:00:00",
-             40_000.0, 42_000.0, outcome],
+            [
+                f"id-{i}",
+                "BTC",
+                "bullish",
+                0.7,
+                "accumulation",
+                0.4,
+                False,
+                "test",
+                1,
+                "[]",
+                "2020-01-01 00:00:00",
+                40_000.0,
+                42_000.0,
+                outcome,
+            ],
         )
     stats = get_hit_rate(conn, asset="BTC")
     assert stats["total_resolved"] == 4
@@ -159,6 +210,7 @@ def test_hit_rate_calculation():
 # test_hit_rate_zero_rows_returns_none
 # ---------------------------------------------------------------------------
 
+
 def test_hit_rate_zero_rows_returns_none():
     conn = _make_conn()
     stats = get_hit_rate(conn, asset="BTC")
@@ -169,6 +221,7 @@ def test_hit_rate_zero_rows_returns_none():
 # ---------------------------------------------------------------------------
 # test_resolve_different_asset_not_touched
 # ---------------------------------------------------------------------------
+
 
 def test_resolve_different_asset_not_touched():
     conn = _make_conn()
@@ -181,8 +234,7 @@ def test_resolve_different_asset_not_touched():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """,
-        ["id-eth", "ETH", "bullish", 0.8, "accumulation",
-         0.5, False, "test", 1, "[]", "2020-01-01 00:00:00", 40_000.0],
+        ["id-eth", "ETH", "bullish", 0.8, "accumulation", 0.5, False, "test", 1, "[]", "2020-01-01 00:00:00", 40_000.0],
     )
     resolved = resolve_expired_signals(conn, "BTC", current_price=45_000.0)
     assert resolved == 0  # ETH signal not touched by BTC resolution
@@ -191,6 +243,7 @@ def test_resolve_different_asset_not_touched():
 # ---------------------------------------------------------------------------
 # test_unresolved_not_counted
 # ---------------------------------------------------------------------------
+
 
 def test_unresolved_not_counted():
     conn = _make_conn()
@@ -204,9 +257,22 @@ def test_unresolved_not_counted():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ["id-resolved", "BTC", "bullish", 0.7, "accumulation",
-         0.4, False, "test", 1, "[]", "2020-01-01 00:00:00",
-         40_000.0, 42_000.0, "correct"],
+        [
+            "id-resolved",
+            "BTC",
+            "bullish",
+            0.7,
+            "accumulation",
+            0.4,
+            False,
+            "test",
+            1,
+            "[]",
+            "2020-01-01 00:00:00",
+            40_000.0,
+            42_000.0,
+            "correct",
+        ],
     )
     conn.execute(
         """
@@ -217,9 +283,20 @@ def test_unresolved_not_counted():
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """,
-        ["id-pending", "BTC", "bullish", 0.8, "accumulation",
-         0.5, False, "test", 24, "[]", datetime.now(timezone.utc).isoformat(),
-         50_000.0],
+        [
+            "id-pending",
+            "BTC",
+            "bullish",
+            0.8,
+            "accumulation",
+            0.5,
+            False,
+            "test",
+            24,
+            "[]",
+            datetime.now(timezone.utc).isoformat(),
+            50_000.0,
+        ],
     )
     stats = get_hit_rate(conn, asset="BTC")
     assert stats["total_resolved"] == 1

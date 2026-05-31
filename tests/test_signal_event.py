@@ -1,6 +1,8 @@
 from dataclasses import asdict
 from datetime import datetime, timezone
+
 from kairos.models.signal_event import SignalEvent
+
 
 def test_signal_event_serializes_to_dict():
     event = SignalEvent(

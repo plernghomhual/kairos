@@ -725,25 +725,37 @@ def _sparkline(values: list[float], width: int = 42) -> str:
     return "".join(blocks[int((value - lo) / (hi - lo) * (len(blocks) - 1))] for value in values)
 
 
-def _render_paper(asset: str = "BTC", days: int = 90, capital: float = 10000.0) -> _ViewRender:
-    from kairos.backtest.engine import run_backtest
+def _ensure_paper_trading_engine(initial_capital: float = 10000.0):
+    from kairos import live
+    from kairos.papertrade import PaperTradingEngine
 
-    result = run_backtest(asset=asset, days=days, initial_capital=capital, strategy="B")
-    pnl = result.final_capital - result.initial_capital
-    pnl_pct = result.total_return_pct
+    if live._PAPER_TRADING_ENGINE is None:
+        live._PAPER_TRADING_ENGINE = PaperTradingEngine(initial_capital=initial_capital)
+    return live._PAPER_TRADING_ENGINE
+
+
+def _render_paper(asset: str = "BTC", days: int = 90, capital: float = 10000.0) -> _ViewRender:
+    engine = _ensure_paper_trading_engine(initial_capital=capital)
+    account = engine.get_account(asset)
+    equity = account.equity_curve[-1] if account.equity_curve else account.current_capital
+    pnl = equity - account.initial_capital
+    pnl_pct = (equity / account.initial_capital - 1) * 100 if account.initial_capital else 0.0
     pnl_style = "bullish" if pnl >= 0 else "bearish"
-    open_trade = next((trade for trade in reversed(result.trades) if not trade.closed), None)
+    open_trade = account.open_position
+    wins = [trade for trade in account.trades if trade.pnl_pct is not None and trade.pnl_pct > 0]
+    win_rate = len(wins) / len(account.trades) * 100 if account.trades else 0.0
+    open_risk = open_trade.size * 100 if open_trade is not None else 0.0
 
     summary = Table.grid(padding=(0, 3))
     summary.add_column(style=_style("dim"))
     summary.add_column(style=_style("highlight", bold=True), justify="right")
-    summary.add_row("Account Equity", f"${result.final_capital:,.2f}")
+    summary.add_row("Account Equity", f"${equity:,.2f}")
     summary.add_row(
         "Session P&L",
         f"[{_style(pnl_style, bold=True)}]{pnl:+,.2f} ({pnl_pct:+.2f}%)[/]",
     )
-    summary.add_row("Open Risk", f"{result.avg_kelly_pct:.1f}% avg Kelly")
-    summary.add_row("Trades", f"{result.total_trades} total / {result.win_rate:.1f}% win")
+    summary.add_row("Open Risk", f"{open_risk:.1f}% live Kelly")
+    summary.add_row("Trades", f"{len(account.trades)} total / {win_rate:.1f}% win")
 
     positions = Table(
         show_header=True,
@@ -757,13 +769,14 @@ def _render_paper(asset: str = "BTC", days: int = 90, capital: float = 10000.0) 
     positions.add_column("Entry", justify="right")
     positions.add_column("Status")
     if open_trade:
-        side_style = "bullish" if open_trade.direction == "bullish" else "bearish"
+        side_style = "bullish" if open_trade.direction == "long" else "bearish"
+        pnl_text = f"{(open_trade.pnl_pct or 0.0):+.2%}"
         positions.add_row(
             asset,
             f"[{_style(side_style, bold=True)}]{open_trade.direction.upper()}[/]",
-            f"{open_trade.position_size:.1%}",
+            f"{open_trade.size:.1%}",
             f"${open_trade.entry_price:,.0f}",
-            "open",
+            f"open {pnl_text}",
         )
     else:
         positions.add_row(asset, "FLAT", "0.0%", "-", "no open positions")
@@ -771,7 +784,7 @@ def _render_paper(asset: str = "BTC", days: int = 90, capital: float = 10000.0) 
     curve = Text()
     curve.append("Equity curve  ", style=_style("dim"))
     curve.append(
-        _sparkline([float(v) for v in result.equity_curve]),
+        _sparkline([float(v) for v in account.equity_curve]),
         style=_style(pnl_style, bold=True),
     )
 
@@ -994,6 +1007,7 @@ def main_tui(asset: str = "BTC") -> None:
         install_fetch_signal_handler()
     except Exception:
         pass
+    _ensure_paper_trading_engine()
 
     state = _DashboardState(asset=asset)
     cache: dict[tuple[str, str], _ViewRender] = {}

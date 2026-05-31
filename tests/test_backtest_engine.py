@@ -383,6 +383,45 @@ def test_run_backtest_with_synthetic_uptrend():
         assert t.direction in ("bullish", "bearish")
 
 
+def test_run_backtest_opens_trade_from_flat_signal(monkeypatch):
+    """A non-neutral flat-state signal must open an initial position."""
+    monkeypatch.setattr(engine, "_get_order_book_depth", lambda asset: None)
+    monkeypatch.setattr(engine, "_store_backtest_features", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_feature_snapshot_at", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_train_ensemble", lambda *args, **kwargs: object())
+
+    def bullish_signal(_ensemble, _snapshot, asset="BTC"):
+        from kairos.models.signal_event import SignalEvent
+
+        return SignalEvent(
+            asset=asset,
+            direction="bullish",
+            confidence=0.75,
+            regime="lv_up",
+            narrative_velocity=0.0,
+            narrative_tipping_point=False,
+            mechanism="deterministic test signal",
+            estimated_hours=72.0,
+            citations=[],
+        )
+
+    monkeypatch.setattr(engine, "_generate_signal_from_snapshot", bullish_signal)
+
+    prices = [100.0 + i for i in range(90)]
+    result = run_backtest(
+        asset="BTC",
+        days=90,
+        prices=prices,
+        fng_scores=[50] * 90,
+        volumes=[1_000_000.0] * 90,
+        strategy="A",
+    )
+
+    assert result.total_trades == 1
+    assert result.trades[0].direction == "bullish"
+    assert result.trades[0].position_size > 0
+
+
 def test_backtest_result_has_trade_journal():
     result = run_backtest(asset="BTC", days=365)
     assert hasattr(result, "trades")

@@ -9,4 +9,4 @@ def detect_anomalies(features: np.ndarray, contamination: float = 0.1) -> np.nda
     """
     clf = IsolationForest(contamination=contamination, random_state=42)
     labels = clf.fit_predict(features)
-    return (labels == -1)
+    return labels == -1

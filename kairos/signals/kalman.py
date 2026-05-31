@@ -10,8 +10,8 @@ def kalman_smooth(observations: np.ndarray) -> np.ndarray:
     if n == 0:
         return np.array([], dtype=np.float64)
 
-    Q = 1e-4   # process noise covariance
-    R = 1.0    # measurement noise covariance
+    Q = 1e-4  # process noise covariance
+    R = 1.0  # measurement noise covariance
 
     x_est = np.zeros(n)
     P = np.ones(n)

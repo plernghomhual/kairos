@@ -1,9 +1,10 @@
-import pytest
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
+
 import duckdb
+
 from kairos.db import create_schema
 from kairos.ingest.reddit import fetch_and_store_posts
+
 
 def make_mock_post(post_id, title, body, score, num_comments, created_utc):
     post = MagicMock()
@@ -15,6 +16,7 @@ def make_mock_post(post_id, title, body, score, num_comments, created_utc):
     post.num_comments = num_comments
     post.created_utc = created_utc
     return post
+
 
 def test_fetch_and_store_posts(tmp_path):
     db_path = str(tmp_path / "test.db")

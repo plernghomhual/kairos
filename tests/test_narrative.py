@@ -1,4 +1,3 @@
-import pytest
 from kairos.signals.narrative import compute_narrative_features
 
 

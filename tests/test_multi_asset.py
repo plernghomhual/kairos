@@ -1,5 +1,7 @@
 """Tests for multi-asset support (ETH, SOL) in the live pipeline."""
+
 import asyncio
+
 import numpy as np
 import pytest
 
@@ -36,6 +38,7 @@ def test_run_pipeline_unknown_asset_passes_through():
 
 def test_fetch_live_data_unknown_asset_raises():
     from kairos.live import fetch_live_data
+
     with pytest.raises(ValueError, match="Unsupported asset"):
         asyncio.run(fetch_live_data(asset="DOGE"))
 

@@ -1,5 +1,5 @@
-import pytest
-from kairos.db import get_connection, create_schema
+from kairos.db import create_schema, get_connection
+
 
 def test_schema_creates_all_tables(tmp_path):
     db_path = str(tmp_path / "test.db")

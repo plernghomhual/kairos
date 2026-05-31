@@ -20,6 +20,15 @@ class _MockResponse:
         return self._payload
 
 
+@pytest.fixture(autouse=True)
+def _clear_live_data_cache():
+    if hasattr(live, "_LIVE_DATA_CACHE"):
+        live._LIVE_DATA_CACHE.clear()
+    yield
+    if hasattr(live, "_LIVE_DATA_CACHE"):
+        live._LIVE_DATA_CACHE.clear()
+
+
 @pytest.mark.asyncio
 async def test_mock_coingecko_api_pipeline_returns_valid_signal(monkeypatch):
     async def noop_source(self, asset):

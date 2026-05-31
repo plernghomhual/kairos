@@ -1,5 +1,5 @@
-import httpx
 import duckdb
+import httpx
 
 FRED_SERIES = ["DFF", "M2SL", "UNRATE"]
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
@@ -22,11 +22,7 @@ async def fetch_and_store_macro(
             resp.raise_for_status()
             observations = resp.json().get("observations", [])
 
-            rows = [
-                (series_id, obs["date"], float(obs["value"]))
-                for obs in observations
-                if obs["value"] != "."
-            ]
+            rows = [(series_id, obs["date"], float(obs["value"])) for obs in observations if obs["value"] != "."]
             conn.executemany(
                 "INSERT OR REPLACE INTO macro_data (series_id, ts, value) VALUES (?, ?, ?)",
                 rows,

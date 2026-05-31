@@ -1126,9 +1126,15 @@ def run_backtest(
             entry_trade.closed = True
             entry_trade.cumulative_capital = round(capital, 2)
 
-        # Determine effective position after exit gating
-        # If signal wanted to exit but was blocked, keep current position
-        effective_new_position = new_position if should_exit or new_position == position else position
+        # Determine effective position after exit gating.
+        # Flat entries are always allowed; exit gating only blocks changes from
+        # an existing open trade.
+        if entry_trade is None:
+            effective_new_position = new_position
+        elif should_exit or new_position == position:
+            effective_new_position = new_position
+        else:
+            effective_new_position = position
 
         # Open new trade (only when position actually changes after exit gating)
         if effective_new_position != position and effective_new_position != 0:

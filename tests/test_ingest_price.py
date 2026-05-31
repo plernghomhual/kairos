@@ -1,7 +1,8 @@
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import duckdb
+import pytest
+
 from kairos.db import create_schema
 from kairos.ingest.price import fetch_and_store_ohlcv
 
@@ -10,6 +11,7 @@ MOCK_COINGECKO_RESPONSE = {
     "market_caps": [[1609459200000, 540000000000], [1609545600000, 580000000000]],
     "total_volumes": [[1609459200000, 35000000000], [1609545600000, 40000000000]],
 }
+
 
 @pytest.mark.asyncio
 async def test_fetch_and_store_ohlcv(tmp_path):

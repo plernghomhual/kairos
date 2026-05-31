@@ -1,6 +1,8 @@
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import duckdb
+import pytest
+
 from kairos.db import create_schema
 from kairos.ingest.news import fetch_and_store_news
 
@@ -22,6 +24,7 @@ MOCK_NEWS_RESPONSE = {
         },
     ]
 }
+
 
 @pytest.mark.asyncio
 async def test_fetch_and_store_news(tmp_path):

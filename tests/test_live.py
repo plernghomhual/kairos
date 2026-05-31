@@ -21,6 +21,17 @@ def _fng(n=60, value=55):
     return [value] * n
 
 
+@pytest.fixture(autouse=True)
+def _clear_live_data_cache():
+    import kairos.live as live
+
+    if hasattr(live, "_LIVE_DATA_CACHE"):
+        live._LIVE_DATA_CACHE.clear()
+    yield
+    if hasattr(live, "_LIVE_DATA_CACHE"):
+        live._LIVE_DATA_CACHE.clear()
+
+
 # ── _fng_narrative ────────────────────────────────────────────────────────────
 
 
@@ -289,3 +300,68 @@ async def test_fetch_live_data_fng_fallback_on_error():
     assert len(prices) == 31
     assert fng_ok is False
     assert fng_scores == _FNG_FALLBACK
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_data_reuses_recent_cache():
+    import kairos.live as live
+
+    live._LIVE_DATA_CACHE.clear()
+    mock_cg = {
+        "prices": [[i * 86400000, 50000.0 + i * 10] for i in range(31)],
+        "total_volumes": [[i * 86400000, 1_000_000.0] for i in range(31)],
+    }
+    mock_fng = {"data": [{"value": "50"} for _ in range(31)]}
+
+    mock_resp_cg = MagicMock()
+    mock_resp_cg.status_code = 200
+    mock_resp_cg.raise_for_status = MagicMock()
+    mock_resp_cg.json.return_value = mock_cg
+
+    mock_resp_fng = MagicMock()
+    mock_resp_fng.raise_for_status = MagicMock()
+    mock_resp_fng.json.return_value = mock_fng
+
+    calls = []
+
+    async def mock_get(url, **kwargs):
+        calls.append(url)
+        if "coingecko" in url:
+            return mock_resp_cg
+        return mock_resp_fng
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get.side_effect = mock_get
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+
+        first = await live.fetch_live_data("BTC")
+        second = await live.fetch_live_data("BTC")
+
+    assert first == second
+    assert sum("coingecko" in url for url in calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_data_returns_stale_cache_on_429():
+    import kairos.live as live
+
+    stale = ([100.0, 101.0], 101.0, [28, 28], True, [1_000_000.0, 1_100_000.0])
+    live._LIVE_DATA_CACHE.clear()
+    live._LIVE_DATA_CACHE["BTC"] = (0.0, stale)
+
+    async def mock_get(_url, **_kwargs):
+        raise httpx.HTTPStatusError("429", request=MagicMock(), response=MagicMock(status_code=429))
+
+    with patch("httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get.side_effect = mock_get
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+
+        result = await live.fetch_live_data("BTC")
+
+    assert result == stale

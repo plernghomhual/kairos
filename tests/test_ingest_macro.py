@@ -1,6 +1,8 @@
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import duckdb
+import pytest
+
 from kairos.db import create_schema
 from kairos.ingest.macro import fetch_and_store_macro
 
@@ -10,6 +12,7 @@ MOCK_FRED_RESPONSE = {
         {"date": "2021-02-01", "value": "0.25"},
     ]
 }
+
 
 @pytest.mark.asyncio
 async def test_fetch_and_store_macro(tmp_path):

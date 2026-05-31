@@ -6,6 +6,7 @@ No API keys needed — CoinGecko free tier + alternative.me Fear & Greed Index.
 import asyncio
 import logging
 import threading
+import time
 
 import httpx
 import numpy as np
@@ -29,12 +30,21 @@ console = Console()
 
 _PAPER_TRADING_ENGINE = None  # set at startup or in tests
 _PAPER_ENGINE_LOCK = threading.Lock()
+_LIVE_DATA_CACHE_TTL_SECONDS = 60.0
+_LIVE_DATA_CACHE: dict[str, tuple[float, tuple[list[float], float, list[int], bool, list[float]]]] = {}
 
 _FNG = "https://api.alternative.me/fng/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; kairos-signal-engine/0.1; +https://github.com/kairos)"}
 _FNG_FALLBACK = [50] * 30  # neutral when API unavailable
 
 _ASSET_IDS = {"BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana"}
+
+
+def _copy_live_data(
+    data: tuple[list[float], float, list[int], bool, list[float]],
+) -> tuple[list[float], float, list[int], bool, list[float]]:
+    prices, current_price, fng_scores, fng_ok, volumes = data
+    return list(prices), float(current_price), list(fng_scores), bool(fng_ok), list(volumes)
 
 
 async def _coingecko_get(client: httpx.AsyncClient, url: str, params: dict) -> httpx.Response:
@@ -96,13 +106,29 @@ async def fetch_live_data(
     """
     if asset not in _ASSET_IDS:
         raise ValueError(f"Unsupported asset '{asset}'. Choose from: {', '.join(_ASSET_IDS)}")
+
+    cached = _LIVE_DATA_CACHE.get(asset)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _LIVE_DATA_CACHE_TTL_SECONDS:
+        return _copy_live_data(cached[1])
+
     coin_id = _ASSET_IDS[asset]
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        prices_task = asyncio.create_task(_fetch_prices(client, coin_id=coin_id))
-        fng_task = asyncio.create_task(_fetch_fng(client))
-        prices, current_price, volumes = await prices_task
-        fng_scores, fng_ok = await fng_task
-    return prices, current_price, fng_scores, fng_ok, volumes
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            (prices, current_price, volumes), (fng_scores, fng_ok) = await asyncio.gather(
+                _fetch_prices(client, coin_id=coin_id),
+                _fetch_fng(client),
+            )
+    except Exception:
+        cached = _LIVE_DATA_CACHE.get(asset)
+        if cached is not None:
+            _logger.warning("Live fetch failed for %s; using stale cached data", asset, exc_info=True)
+            return _copy_live_data(cached[1])
+        raise
+
+    result = (prices, current_price, fng_scores, fng_ok, volumes)
+    _LIVE_DATA_CACHE[asset] = (time.monotonic(), _copy_live_data(result))
+    return _copy_live_data(result)
 
 
 def _fng_narrative(fng_scores: list[int]) -> dict:

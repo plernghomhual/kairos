@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
-import httpx
+
 import duckdb
+import httpx
 
 
 async def fetch_and_store_ohlcv(

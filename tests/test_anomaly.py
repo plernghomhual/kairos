@@ -1,5 +1,5 @@
 import numpy as np
-import pytest
+
 from kairos.signals.anomaly import detect_anomalies
 
 
