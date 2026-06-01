@@ -14,6 +14,10 @@ services:
       FRED_API_KEY: ${FRED_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       SOLANA_RPC_URL: ${SOLANA_RPC_URL:-}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY:-}
+      KAIROS_API_KEY: ${KAIROS_API_KEY:-}
     command: ["kairos", "--asset", "BTC", "--no-tui"]
     security_opt:
       - no-new-privileges:true

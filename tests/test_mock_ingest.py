@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 import kairos.backtest.engine as engine
 import kairos.ingest as ingest
 import kairos.live as live
+from kairos.ingest.github import _verify_webhook_signature
 from kairos.live import DataFetchSupervisor, fetch_live_data, run_pipeline
 from kairos.models.signal_event import SignalEvent
 
@@ -219,3 +222,26 @@ async def test_partial_api_failure_keeps_price_data(monkeypatch):
     assert result["github"]["available"] is False
     # Circuit breaker replaces exception message with fallback
     assert result["github"]["error"] is not None
+
+
+def test_webhook_signature_valid(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+    body = b'{"action": "push"}'
+    sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+    assert _verify_webhook_signature(body, sig) is True
+
+
+def test_webhook_signature_invalid(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+    body = b'{"action": "push"}'
+    assert _verify_webhook_signature(body, "sha256=badhash") is False
+
+
+def test_webhook_signature_missing_when_secret_set(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+    assert _verify_webhook_signature(b"body", None) is False
+
+
+def test_webhook_no_secret_allows_any(monkeypatch):
+    monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+    assert _verify_webhook_signature(b"any body", None) is True

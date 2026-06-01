@@ -41,13 +41,16 @@ def main() -> int:
     db_path = os.getenv("KAIROS_DB_PATH", "kairos.db")
     api_port = os.getenv("KAIROS_API_PORT", "8000")
 
-    checks = 0
-    if _database_is_readable(db_path):
-        checks += 1
-    if _api_is_healthy(api_port):
-        checks += 1
+    db_ok = _database_is_readable(db_path)
+    api_ok = _api_is_healthy(api_port)
 
-    return 0 if checks >= 1 else 1
+    if not db_ok:
+        print("HEALTH FAIL: database not readable", flush=True)
+    if not api_ok:
+        print("HEALTH FAIL: API not responding", flush=True)
+
+    # Both checks must pass — a running API with a crashed database is not healthy.
+    return 0 if (db_ok and api_ok) else 1
 
 
 if __name__ == "__main__":

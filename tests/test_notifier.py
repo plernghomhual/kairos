@@ -1,5 +1,7 @@
 import importlib
+import ssl
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -181,3 +183,32 @@ def test_config_defaults(monkeypatch):
     assert config.SMTP_PASSWORD == ""
     assert config.EMAIL_FROM == ""
     assert config.EMAIL_TO == ""
+
+
+def test_smtp_starttls_passes_ssl_context():
+    from kairos.notifier import Notifier, NotifierConfig
+
+    mock_smtp = MagicMock()
+    mock_smtp.starttls = MagicMock()
+    mock_smtp.login = MagicMock()
+    mock_smtp.send_message = MagicMock()
+
+    with patch("smtplib.SMTP") as smtp_cls:
+        smtp_cls.return_value.__enter__ = lambda s: mock_smtp
+        smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        config = NotifierConfig(
+            email_smtp_host="smtp.example.com",
+            email_smtp_port=587,
+            email_username="user@example.com",
+            email_password="secret",
+            email_from="from@example.com",
+            email_to="to@example.com",
+        )
+        notifier = Notifier(config)
+        notifier._send_email_sync("Test Subject", "Test body")
+
+    mock_smtp.starttls.assert_called_once()
+    call_kwargs = mock_smtp.starttls.call_args.kwargs
+    assert "context" in call_kwargs
+    assert isinstance(call_kwargs["context"], ssl.SSLContext)

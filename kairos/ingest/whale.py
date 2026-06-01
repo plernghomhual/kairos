@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -40,6 +41,24 @@ _RECENT_TRANSFERS: deque[dict[str, Any]] = deque(maxlen=RECENT_FLOW_LIMIT)
 _RECENT_TRANSFER_KEYS: set[tuple[Any, ...]] = set()
 _SEEN_SIGNATURES: set[str] = set()
 _STREAM_TASK: asyncio.Task[None] | None = None
+
+# Lazy async locks — created on first use to avoid "no event loop" at import time.
+_TRANSFERS_LOCK: asyncio.Lock | None = None
+_SIGNATURES_LOCK: asyncio.Lock | None = None
+
+
+def _get_transfers_lock() -> asyncio.Lock:
+    global _TRANSFERS_LOCK
+    if _TRANSFERS_LOCK is None:
+        _TRANSFERS_LOCK = asyncio.Lock()
+    return _TRANSFERS_LOCK
+
+
+def _get_signatures_lock() -> asyncio.Lock:
+    global _SIGNATURES_LOCK
+    if _SIGNATURES_LOCK is None:
+        _SIGNATURES_LOCK = asyncio.Lock()
+    return _SIGNATURES_LOCK
 
 
 def register_exchange_wallet(address: str, exchange: str) -> None:
@@ -240,30 +259,40 @@ def _transfer_key(transfer: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _remember_transfer(transfer: dict[str, Any]) -> None:
-    key = _transfer_key(transfer)
-    if key in _RECENT_TRANSFER_KEYS:
-        return
-    item = dict(transfer)
-    item.setdefault("detected_at", _utc_now().isoformat())
-    _RECENT_TRANSFERS.append(item)
-    _RECENT_TRANSFER_KEYS.add(key)
-    if len(_RECENT_TRANSFER_KEYS) > RECENT_FLOW_LIMIT * 2:
-        _RECENT_TRANSFER_KEYS.clear()
-        _RECENT_TRANSFER_KEYS.update(_transfer_key(t) for t in _RECENT_TRANSFERS)
+async def _remember_transfer(transfer: dict[str, Any]) -> None:
+    async with _get_transfers_lock():
+        key = _transfer_key(transfer)
+        if key in _RECENT_TRANSFER_KEYS:
+            return
+        item = dict(transfer)
+        item.setdefault("detected_at", _utc_now().isoformat())
+        _RECENT_TRANSFERS.append(item)
+        _RECENT_TRANSFER_KEYS.add(key)
+        if len(_RECENT_TRANSFER_KEYS) > RECENT_FLOW_LIMIT * 2:
+            _RECENT_TRANSFER_KEYS.clear()
+            _RECENT_TRANSFER_KEYS.update(_transfer_key(t) for t in _RECENT_TRANSFERS)
 
 
 def _is_exchange_related(transfer: dict[str, Any]) -> bool:
     return bool(transfer.get("from_exchange") or transfer.get("to_exchange"))
 
 
+_persist_local = threading.local()
+
+
+def _get_persist_conn(db_path: str | None = None):
+    if not hasattr(_persist_local, "conn") or _persist_local.conn is None:
+        _persist_local.conn = get_connection(db_path or DB_PATH)
+        create_schema(_persist_local.conn)
+    return _persist_local.conn
+
+
 def _persist_transfer(transfer: dict[str, Any], db_path: str | None = None) -> None:
     if not _is_exchange_related(transfer):
         return
 
-    conn = get_connection(db_path or DB_PATH)
     try:
-        create_schema(conn)
+        conn = _get_persist_conn(db_path)
         if conn.execute(
             "SELECT 1 FROM whale_transfers WHERE signature = ?",
             [transfer.get("signature")],
@@ -287,8 +316,9 @@ def _persist_transfer(transfer: dict[str, Any], db_path: str | None = None) -> N
                 transfer.get("block_time"),
             ],
         )
-    finally:
-        conn.close()
+    except Exception as exc:
+        logger.warning("Failed to persist whale transfer: %s", exc)
+        _persist_local.conn = None  # reset so next call gets a fresh connection
 
 
 def _net_exchange_flow(transfers: list[dict[str, Any]]) -> float:
@@ -370,7 +400,8 @@ def get_whale_metrics(
 async def get_recent_flows(minutes: int = 5) -> list[dict[str, Any]]:
     """Return in-memory transfers detected within the last `minutes` minutes."""
     cutoff = _utc_now() - timedelta(minutes=minutes)
-    return [dict(transfer) for transfer in _RECENT_TRANSFERS if _parse_dt(transfer.get("detected_at")) >= cutoff]
+    async with _get_transfers_lock():
+        return [dict(transfer) for transfer in _RECENT_TRANSFERS if _parse_dt(transfer.get("detected_at")) >= cutoff]
 
 
 async def _rpc_post(
@@ -606,17 +637,20 @@ async def _handle_logs_notification(
     if not _has_transfer_log(logs):
         return
     signature = value.get("signature")
-    if not signature or signature in _SEEN_SIGNATURES:
+    if not signature:
         return
-    _SEEN_SIGNATURES.add(signature)
-    if len(_SEEN_SIGNATURES) > RECENT_FLOW_LIMIT * 4:
-        _SEEN_SIGNATURES.clear()
+    async with _get_signatures_lock():
+        if signature in _SEEN_SIGNATURES:
+            return
+        _SEEN_SIGNATURES.add(signature)
+        if len(_SEEN_SIGNATURES) > RECENT_FLOW_LIMIT * 4:
+            _SEEN_SIGNATURES.clear()
 
     result = await _get_transaction(client, signature, rpc_url)
     if not result:
         return
     for transfer in _parse_transaction_result(signature, result):
-        _remember_transfer(transfer)
+        await _remember_transfer(transfer)
         _persist_transfer(transfer, db_path)
 
 

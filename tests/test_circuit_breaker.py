@@ -92,6 +92,41 @@ async def test_circuit_breaker_half_open_then_opens():
     assert breaker.get_state() is CircuitBreakerState.OPEN
 
 
+@pytest.mark.asyncio
+async def test_circuit_breaker_half_open_budget_respected_under_concurrency():
+    """Concurrent callers must not exceed half_open_max_requests budget."""
+    breaker = CircuitBreaker(
+        "unit",
+        failure_threshold=1,
+        recovery_timeout=0.01,
+        half_open_max_requests=1,
+    )
+
+    async def failing_call():
+        raise RuntimeError("down")
+
+    await breaker.call(failing_call, fallback="fallback")
+    await asyncio.sleep(0.03)
+    assert breaker.get_state() is CircuitBreakerState.HALF_OPEN
+
+    calls_made = 0
+
+    async def tracked_call():
+        nonlocal calls_made
+        calls_made += 1
+        await asyncio.sleep(0.01)
+        return "live"
+
+    results = await asyncio.gather(
+        breaker.call(tracked_call, fallback="fallback"),
+        breaker.call(tracked_call, fallback="fallback"),
+        breaker.call(tracked_call, fallback="fallback"),
+    )
+
+    assert calls_made <= breaker.half_open_max_requests
+    assert results.count("fallback") >= 2
+
+
 def test_get_health_summary():
     for breaker in CIRCUIT_BREAKERS.values():
         breaker.reset()

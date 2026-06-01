@@ -1,12 +1,12 @@
 """Tests for live paper trading state and persistence."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from kairos.backtest.engine import _kelly_fraction
 from kairos.models.signal_event import SignalEvent
-from kairos.papertrade import PaperTradingEngine
+from kairos.papertrade import PaperPosition, PaperTradingEngine, _should_exit
 
 
 def _event(
@@ -162,3 +162,62 @@ def test_live_context_includes_paper_account(monkeypatch):
     assert event.direction == "bullish"
     assert "paper_account" in ctx
     assert ctx["paper_account"].open_position is not None
+
+
+def test_capital_floor_prevents_negative_capital():
+    """A total loss must not produce negative capital."""
+    engine = PaperTradingEngine(initial_capital=10_000.0)
+    engine.process_signal(_event("bullish", event_id="loss-open"), current_price=100.0)
+    # Exit at near-zero price to force maximum loss
+    closed = engine.process_signal(_event("neutral", event_id="loss-close"), current_price=0.01)
+    assert closed is not None
+    account = engine.get_account("BTC")
+    assert account.current_capital >= 0.0
+
+
+def test_persist_close_idempotent(tmp_path):
+    """Calling _persist_close twice on the same position must not raise or duplicate rows."""
+    db_path = str(tmp_path / "paper.db")
+    engine = PaperTradingEngine(initial_capital=10_000.0, db_path=db_path)
+    engine.process_signal(_event("bullish", event_id="idem-open"), current_price=100.0)
+    engine.process_signal(_event("neutral", event_id="idem-close"), current_price=110.0)
+
+    account = engine.get_account("BTC")
+    assert len(account.trades) == 1
+    closed_pos = account.trades[0]
+
+    engine._persist_close(closed_pos)  # second call — must not raise
+
+    rows = engine._conn.execute(
+        "SELECT COUNT(*) FROM paper_trades WHERE signal_id = ? AND closed = TRUE",
+        ["idem-open"],
+    ).fetchone()
+    assert rows[0] == 1
+    engine.close()
+
+
+def test_hold_hours_uses_wall_clock():
+    """Exit gate must fire based on wall-clock elapsed time, not signal timestamp."""
+    old_entry = datetime.now(timezone.utc) - timedelta(hours=100)
+    position = PaperPosition(
+        asset="BTC",
+        direction="long",
+        entry_price=100.0,
+        entry_time=old_entry,
+        size=0.1,
+        signal_id="hold-test",
+        entry_regime="lv_up",
+    )
+    event = SignalEvent(
+        asset="BTC",
+        direction="bullish",
+        confidence=0.7,
+        regime="lv_up",
+        narrative_velocity=0.1,
+        narrative_tipping_point=False,
+        mechanism="test",
+        estimated_hours=24.0,
+        citations=[],
+    )
+    # 100h elapsed >> 24h max_hold → exit gate must trigger
+    assert _should_exit(position, event, current_price=100.0, price_history=[]) is True

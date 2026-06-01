@@ -32,6 +32,7 @@ _PAPER_TRADING_ENGINE = None  # set at startup or in tests
 _PAPER_ENGINE_LOCK = threading.Lock()
 _LIVE_DATA_CACHE_TTL_SECONDS = 60.0
 _LIVE_DATA_CACHE: dict[str, tuple[float, tuple[list[float], float, list[int], bool, list[float]]]] = {}
+_LIVE_DATA_CACHE_LOCK = threading.Lock()
 
 _FNG = "https://api.alternative.me/fng/"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; kairos-signal-engine/0.1; +https://github.com/kairos)"}
@@ -50,6 +51,7 @@ def _copy_live_data(
 async def _coingecko_get(client: httpx.AsyncClient, url: str, params: dict) -> httpx.Response:
     """GET with retry + exponential backoff on 429 rate limits."""
     backoff = 1.0
+    resp: httpx.Response | None = None
     for attempt in range(5):
         resp = await client.get(url, params=params, headers=_HEADERS)
         status = getattr(resp, "status_code", 200)
@@ -60,6 +62,8 @@ async def _coingecko_get(client: httpx.AsyncClient, url: str, params: dict) -> h
         _logger.warning("CoinGecko 429 rate-limited (attempt %d/5); backing off %.0fs", attempt + 1, backoff)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, _RETRY_MAX_BACKOFF)
+    if resp is None:
+        raise RuntimeError("CoinGecko request never executed")
     if hasattr(resp, "raise_for_status"):
         resp.raise_for_status()
     return resp
@@ -107,10 +111,11 @@ async def fetch_live_data(
     if asset not in _ASSET_IDS:
         raise ValueError(f"Unsupported asset '{asset}'. Choose from: {', '.join(_ASSET_IDS)}")
 
-    cached = _LIVE_DATA_CACHE.get(asset)
-    now = time.monotonic()
-    if cached is not None and now - cached[0] < _LIVE_DATA_CACHE_TTL_SECONDS:
-        return _copy_live_data(cached[1])
+    with _LIVE_DATA_CACHE_LOCK:
+        cached = _LIVE_DATA_CACHE.get(asset)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _LIVE_DATA_CACHE_TTL_SECONDS:
+            return _copy_live_data(cached[1])
 
     coin_id = _ASSET_IDS[asset]
     try:
@@ -127,7 +132,8 @@ async def fetch_live_data(
         raise
 
     result = (prices, current_price, fng_scores, fng_ok, volumes)
-    _LIVE_DATA_CACHE[asset] = (time.monotonic(), _copy_live_data(result))
+    with _LIVE_DATA_CACHE_LOCK:
+        _LIVE_DATA_CACHE[asset] = (time.monotonic(), _copy_live_data(result))
     return _copy_live_data(result)
 
 
@@ -233,7 +239,7 @@ def _build_training_data(
 
     X_rows, y_labels = [], []
     for t in range(10, n - 2):
-        slope = float(np.polyfit(range(10), smoothed[t - 10 : t], 1)[0])
+        slope = float(np.polyfit(range(10), smoothed[t - 9 : t + 1], 1)[0])
         vz = float(vol_z_arr[t])
         anom = float(anomaly_flags[t])
 
@@ -401,13 +407,14 @@ def run_pipeline_with_context(
     )
     event.confidence = adjusted_conf
     ctx["divergence_applied"] = diverged
-    if _PAPER_TRADING_ENGINE is not None and prices:
+    if prices:
         with _PAPER_ENGINE_LOCK:
-            try:
-                _PAPER_TRADING_ENGINE.process_signal(event, current_price=prices[-1])
-                ctx["paper_account"] = _PAPER_TRADING_ENGINE.get_account(asset)
-            except Exception:
-                pass
+            if _PAPER_TRADING_ENGINE is not None:
+                try:
+                    _PAPER_TRADING_ENGINE.process_signal(event, current_price=prices[-1])
+                    ctx["paper_account"] = _PAPER_TRADING_ENGINE.get_account(asset)
+                except Exception:
+                    pass
     return event, ctx
 
 

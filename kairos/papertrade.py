@@ -239,7 +239,7 @@ class PaperTradingEngine:
         position.pnl_pct = _position_return(position, exit_price)
         position.closed = True
 
-        account.current_capital *= 1 + position.size * position.pnl_pct
+        account.current_capital = max(account.current_capital * (1 + position.size * position.pnl_pct), 0.0)
         account.open_position = None
         account.trades.append(position)
         self._append_equity(account, account.current_capital)
@@ -264,8 +264,9 @@ class PaperTradingEngine:
             INSERT INTO paper_trades (
                 asset, signal_id, direction, entry_price, entry_time, size,
                 exit_price, exit_time, pnl_pct, closed,
-                signal_confidence, signal_regime
-            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, FALSE, ?, ?)
+                signal_confidence, signal_regime,
+                high_watermark, low_watermark
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, FALSE, ?, ?, ?, ?)
             """,
             [
                 position.asset,
@@ -276,6 +277,8 @@ class PaperTradingEngine:
                 position.size,
                 event.confidence,
                 event.regime,
+                position.high_watermark,
+                position.low_watermark,
             ],
         )
 
@@ -285,13 +288,16 @@ class PaperTradingEngine:
         self._conn.execute(
             """
             UPDATE paper_trades
-            SET exit_price = ?, exit_time = ?, pnl_pct = ?, closed = TRUE
+            SET exit_price = ?, exit_time = ?, pnl_pct = ?, closed = TRUE,
+                high_watermark = ?, low_watermark = ?
             WHERE signal_id = ? AND asset = ? AND closed = FALSE
             """,
             [
                 position.exit_price,
                 position.exit_time,
                 position.pnl_pct,
+                position.high_watermark,
+                position.low_watermark,
                 position.signal_id,
                 position.asset,
             ],
@@ -303,7 +309,8 @@ class PaperTradingEngine:
         rows = self._conn.execute(
             """
             SELECT asset, signal_id, direction, entry_price, entry_time, size,
-                   exit_price, exit_time, pnl_pct, closed
+                   exit_price, exit_time, pnl_pct, closed,
+                   high_watermark, low_watermark
             FROM paper_trades
             ORDER BY entry_time ASC
             """
@@ -346,10 +353,13 @@ def format_paper_summary(engine: PaperTradingEngine, asset: str) -> str:
     )
 
 
+_MAX_KELLY_FRACTION = 0.25  # cap single-position allocation at 25%
+
+
 def _kelly(confidence: float) -> float:
     from kairos.backtest.engine import _kelly_fraction
 
-    return _kelly_fraction(confidence)
+    return min(_kelly_fraction(confidence), _MAX_KELLY_FRACTION)
 
 
 def _slippage(regime: str, direction: str = "buy") -> float:
@@ -387,9 +397,9 @@ def _should_exit(
             if current_price > lwm + ATR_MULTIPLIER_SHORT * atr_val:
                 return True
 
-    # Gate c: max hold
+    # Gate c: max hold — use wall-clock elapsed time, not signal timestamp delta.
     max_hours = event.estimated_hours or 72.0
-    hold_hours = (event.triggered_at - position.entry_time).total_seconds() / 3600
+    hold_hours = (datetime.now(timezone.utc) - position.entry_time).total_seconds() / 3600
     if hold_hours >= max_hours:
         return True
 
@@ -425,6 +435,8 @@ def _position_from_row(row: tuple[Any, ...]) -> PaperPosition:
         exit_time,
         pnl_pct,
         closed,
+        high_watermark,
+        low_watermark,
     ) = row
     return PaperPosition(
         asset=asset,
@@ -438,6 +450,8 @@ def _position_from_row(row: tuple[Any, ...]) -> PaperPosition:
         pnl_pct=float(pnl_pct) if pnl_pct is not None else None,
         closed=bool(closed),
         entry_regime="lv_up",
+        high_watermark=float(high_watermark) if high_watermark is not None else None,
+        low_watermark=float(low_watermark) if low_watermark is not None else None,
     )
 
 

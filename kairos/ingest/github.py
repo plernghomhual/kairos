@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -398,15 +401,20 @@ def _rate_limit_sleep_seconds(response: httpx.Response) -> float:
     return float(min(max(delay, 1), 60))
 
 
+_MAX_WEBHOOK_HEADER_BYTES = 8_192  # 8 KB — sufficient for any legitimate HTTP header block
+_MAX_WEBHOOK_BODY_BYTES = 1_048_576  # 1 MB — GitHub payloads are well under this
+
+
 async def _handle_webhook_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
     try:
-        header_bytes = await reader.readuntil(b"\r\n\r\n")
+        header_bytes = await reader.readuntil(b"\r\n\r\n", limit=_MAX_WEBHOOK_HEADER_BYTES)
         request_line, headers = _parse_http_headers(header_bytes)
         method, path, _version = request_line.split(" ", 2)
-        content_length = _safe_int(headers.get("content-length")) or 0
+        raw_cl = _safe_int(headers.get("content-length")) or 0
+        content_length = min(raw_cl, _MAX_WEBHOOK_BODY_BYTES)
         body = await reader.readexactly(content_length) if content_length else b""
         status, response = await _process_webhook_request(method, path, headers, body)
     except Exception as exc:
@@ -416,6 +424,16 @@ async def _handle_webhook_client(
     _write_http_response(writer, status, response)
     writer.close()
     await writer.wait_closed()
+
+
+def _verify_webhook_signature(body: bytes, signature_header: str | None) -> bool:
+    secret = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+    if not secret:
+        return True  # no secret configured — allow (warn at startup if desired)
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature_header)
 
 
 async def _process_webhook_request(
@@ -428,6 +446,10 @@ async def _process_webhook_request(
         return 405, {"ok": False, "error": "method not allowed"}
     if path.split("?", 1)[0] != "/webhook":
         return 404, {"ok": False, "error": "not found"}
+
+    sig = headers.get("x-hub-signature-256")
+    if not _verify_webhook_signature(body, sig):
+        return 401, {"ok": False, "error": "invalid webhook signature"}
 
     event_type = headers.get("x-github-event", "")
     if event_type not in _EVENT_TYPES:

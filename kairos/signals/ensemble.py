@@ -471,15 +471,48 @@ class SignalEnsemble:
         self._trained_at = time.time()
         self._candle_count = 0
 
-    def fit(self, fv_list: list) -> None:
-        """Backward-compat: train from a list of FeatureVectors. Labels inferred from kalman_slope."""
+    def fit(
+        self,
+        fv_list: list,
+        prices: list[float] | None = None,
+        lookahead: int = 2,
+    ) -> None:
+        """Train from a list of FeatureVectors.
+
+        Parameters
+        ----------
+        fv_list:
+            Feature vectors for training.
+        prices:
+            Historical prices aligned with fv_list. When provided, labels are
+            derived from forward returns: ``prices[i + lookahead] > prices[i]``.
+            Must have at least ``len(fv_list) + lookahead`` elements.
+            **Required** to avoid circular label leakage — without it the method
+            falls back to ``kalman_slope > 0`` which is a predictor feature and
+            produces inflated in-sample performance.
+        lookahead:
+            Number of bars ahead to use for forward-return labels (default 2).
+        """
         if not fv_list:
             raise ValueError("Cannot fit on empty list of feature vectors")
-        y = np.array([1 if fv.kalman_slope > 0 else 0 for fv in fv_list])
+        n = len(fv_list)
+        if prices is not None:
+            if len(prices) < n + lookahead:
+                raise ValueError(
+                    f"prices must have at least {n + lookahead} elements to compute "
+                    f"{lookahead}-bar forward returns for {n} feature vectors "
+                    f"(got {len(prices)})"
+                )
+            y = np.array([1 if prices[i + lookahead] > prices[i] else 0 for i in range(n)])
+        else:
+            raise ValueError(
+                "ensemble.fit() requires prices= to avoid circular label leakage. "
+                "Pass a list of prices with at least len(fv_list) + lookahead elements."
+            )
         if len(set(y.tolist())) < 2:
             raise ValueError("Need both bullish and bearish examples")
         X = np.vstack([fv.to_array() for fv in fv_list])
-        regime_labels = np.array(["lv_up"] * len(fv_list))
+        regime_labels = np.array(["lv_up"] * n)
         for i, fv in enumerate(fv_list):
             if getattr(fv, "regime_hv_up", 0.0) > 0.5:
                 regime_labels[i] = "hv_up"

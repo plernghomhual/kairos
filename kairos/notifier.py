@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import smtplib
+import ssl
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -164,7 +165,7 @@ class Notifier:
             logger.warning("Telegram notification rate limit reached")
             return False
 
-        url = f"https://api.telegram.org/bot{self._config.telegram_token}/sendMessage"
+        url = "https://api.telegram.org/bot{}/sendMessage".format(self._config.telegram_token)
         payload = {
             "chat_id": self._config.telegram_chat_id,
             "text": message,
@@ -172,9 +173,18 @@ class Notifier:
             "reply_markup": {"inline_keyboard": [[{"text": "Acknowledge", "callback_data": "kairos_ack"}]]},
         }
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
+            _httpx_log = logging.getLogger("httpx")
+            _httpcore_log = logging.getLogger("httpcore")
+            _prev = (_httpx_log.level, _httpcore_log.level)
+            _httpx_log.setLevel(logging.ERROR)
+            _httpcore_log.setLevel(logging.ERROR)
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(url, json=payload)
+                    resp.raise_for_status()
+            finally:
+                _httpx_log.setLevel(_prev[0])
+                _httpcore_log.setLevel(_prev[1])
             return True
         except Exception:
             logger.warning("Telegram notification failed", exc_info=True)
@@ -233,7 +243,7 @@ class Notifier:
         msg.add_alternative(html, subtype="html")
 
         with smtplib.SMTP(self._config.email_smtp_host, self._config.email_smtp_port, timeout=10) as smtp:
-            smtp.starttls()
+            smtp.starttls(context=ssl.create_default_context())
             if self._config.email_username:
                 smtp.login(self._config.email_username, self._config.email_password)
             smtp.send_message(msg)

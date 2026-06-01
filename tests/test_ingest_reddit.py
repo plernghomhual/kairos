@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import duckdb
@@ -35,7 +36,7 @@ def test_fetch_and_store_posts(tmp_path):
         mock_reddit.subreddit.return_value = mock_subreddit
         mock_reddit_cls.return_value = mock_reddit
 
-        fetch_and_store_posts(conn, client_id="x", client_secret="y", user_agent="z")
+        asyncio.run(fetch_and_store_posts(conn, client_id="x", client_secret="y", user_agent="z"))
 
     rows = conn.execute("SELECT * FROM raw_posts").fetchall()
     assert len(rows) == 2

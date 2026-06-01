@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pathlib
 import time
 from dataclasses import fields
 from datetime import datetime, timezone
@@ -23,12 +24,15 @@ def _resolve_db_path(db_path: str) -> str:
 def get_connection(db_path: str = "kairos.db") -> duckdb.DuckDBPyConnection:
     """Connect with retry on lock contention."""
     db_path = _resolve_db_path(db_path)
+    pathlib.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     backoff = _DB_RETRY_BACKOFF
+    last_exc: Exception | None = None
     for attempt in range(1, _DB_RETRY_MAX + 1):
         try:
             return duckdb.connect(db_path)
         except (duckdb.IOException, OSError) as exc:
             if "lock" in str(exc).lower():
+                last_exc = exc
                 _logger.warning(
                     "DuckDB lock conflict (attempt %d/%d); retrying in %.1fs",
                     attempt,
@@ -39,7 +43,9 @@ def get_connection(db_path: str = "kairos.db") -> duckdb.DuckDBPyConnection:
                 backoff = min(backoff * 2, 4.0)
             else:
                 raise
-    return duckdb.connect(db_path)
+    raise RuntimeError(
+        f"Could not acquire DuckDB connection to {db_path!r} after {_DB_RETRY_MAX} attempts"
+    ) from last_exc
 
 
 def _feature_store_columns() -> str:
@@ -159,21 +165,25 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS paper_trades (
-            asset           VARCHAR,
-            signal_id       VARCHAR,
-            direction       VARCHAR,
-            entry_price     DOUBLE,
-            entry_time      TIMESTAMP,
-            size            DOUBLE,
-            exit_price      DOUBLE,
-            exit_time       TIMESTAMP,
-            pnl_pct         DOUBLE,
-            closed          BOOLEAN DEFAULT FALSE,
+            asset             VARCHAR,
+            signal_id         VARCHAR,
+            direction         VARCHAR,
+            entry_price       DOUBLE,
+            entry_time        TIMESTAMP,
+            size              DOUBLE,
+            exit_price        DOUBLE,
+            exit_time         TIMESTAMP,
+            pnl_pct           DOUBLE,
+            closed            BOOLEAN DEFAULT FALSE,
             signal_confidence DOUBLE,
-            signal_regime   VARCHAR,
+            signal_regime     VARCHAR,
+            high_watermark    DOUBLE,
+            low_watermark     DOUBLE,
             PRIMARY KEY (signal_id, asset)
         )
     """)
+    conn.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS high_watermark DOUBLE")
+    conn.execute("ALTER TABLE paper_trades ADD COLUMN IF NOT EXISTS low_watermark DOUBLE")
 
 
 def save_signal(
@@ -184,12 +194,24 @@ def save_signal(
     """Persist a SignalEvent with the price at the time of signal generation."""
     conn.execute(
         """
-        INSERT OR REPLACE INTO signal_events (
+        INSERT INTO signal_events (
             id, asset, direction, confidence, regime,
             narrative_velocity, narrative_tipping_point, mechanism,
             estimated_hours, citations, triggered_at,
             price_at_signal, price_at_expiry, outcome
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        ON CONFLICT(id) DO UPDATE SET
+            asset                   = excluded.asset,
+            direction               = excluded.direction,
+            confidence              = excluded.confidence,
+            regime                  = excluded.regime,
+            narrative_velocity      = excluded.narrative_velocity,
+            narrative_tipping_point = excluded.narrative_tipping_point,
+            mechanism               = excluded.mechanism,
+            estimated_hours         = excluded.estimated_hours,
+            citations               = excluded.citations,
+            triggered_at            = excluded.triggered_at,
+            price_at_signal         = excluded.price_at_signal
         """,
         [
             event.id,
@@ -293,7 +315,17 @@ def get_signal_history(
         "price_at_expiry",
         "outcome",
     ]
-    return [dict(zip(columns, row)) for row in rows]
+    results = []
+    for row in rows:
+        d = dict(zip(columns, row))
+        raw_citations = d.get("citations")
+        if isinstance(raw_citations, str):
+            try:
+                d["citations"] = json.loads(raw_citations)
+            except (json.JSONDecodeError, ValueError):
+                d["citations"] = []
+        results.append(d)
+    return results
 
 
 def get_hit_rate(

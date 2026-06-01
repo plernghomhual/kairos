@@ -155,7 +155,7 @@ def format_compact_track_record(result: BacktestResult) -> str:
     t.add_column("Metric", style="dim")
     t.add_column("Value", style="white")
 
-    bench_ret = (result.benchmark_curve[-1] / result.initial_capital - 1) * 100
+    bench_ret = _benchmark_return_pct(result)
     color_sharpe = "green" if result.sharpe > 0.5 else "yellow" if result.sharpe > 0 else "red"
     color_dd = "green" if result.max_drawdown_pct < 20 else "yellow" if result.max_drawdown_pct < 35 else "red"
 

@@ -112,8 +112,11 @@ def test_multi_asset_sequential_pipelines_do_not_pollute_state(sample_prices_60,
 
 
 def test_concurrent_pipelines_different_assets_do_not_interfere():
+    prices = [50_000.0 + i * 100 for i in range(90)]
+    fng_scores = [50] * 90
+
     def run(asset):
-        return run_pipeline([], fng_scores=[], asset=asset)
+        return run_pipeline(prices, fng_scores=fng_scores, asset=asset)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         btc, eth = list(pool.map(run, ["BTC", "ETH"]))
@@ -121,6 +124,8 @@ def test_concurrent_pipelines_different_assets_do_not_interfere():
     assert btc.asset == "BTC"
     assert eth.asset == "ETH"
     assert btc.id != eth.id
+    assert btc.direction in ("bullish", "bearish", "neutral")
+    assert eth.direction in ("bullish", "bearish", "neutral")
 
 
 def test_full_backtest_report_csv_is_valid(backtest_result):

@@ -14,6 +14,10 @@ from kairos.signals.ensemble import FeatureVector
 
 _FEATURE_FIELDS = tuple(field.name for field in fields(FeatureVector))
 
+# Track which db paths have already had create_schema run so we do not pay DDL
+# overhead on every FeatureStore instantiation in hot-path code.
+_SCHEMA_INITIALIZED: set[str] = set()
+
 
 def _resolve_db_path(db_path: str) -> str:
     if db_path == "kairos.db":
@@ -67,7 +71,9 @@ class FeatureStore:
         """Connect to the project DuckDB database and ensure schema exists."""
         self.db_path = _resolve_db_path(db_path)
         self.conn = get_connection(self.db_path)
-        create_schema(self.conn)
+        if self.db_path not in _SCHEMA_INITIALIZED:
+            create_schema(self.conn)
+            _SCHEMA_INITIALIZED.add(self.db_path)
 
     def close(self) -> None:
         self.conn.close()
@@ -190,20 +196,24 @@ class FeatureStore:
                 "field_stats": {},
             }
 
-        field_stats = {}
+        # Build a single aggregation query for all fields to avoid N+1 round trips.
+        agg_exprs = []
         for name in _FEATURE_FIELDS:
-            expr = f"CAST({name} AS DOUBLE)" if name == "narrative_tipping_point" else name
-            mean, std = self.conn.execute(
-                f"""
-                SELECT AVG({expr}), STDDEV_POP({expr})
-                FROM feature_store
-                WHERE asset = ?
-                """,
-                [_asset_key(asset)],
-            ).fetchone()
+            expr = f'CAST("{name}" AS DOUBLE)' if name == "narrative_tipping_point" else f'"{name}"'
+            agg_exprs.append(f"AVG({expr})")
+            agg_exprs.append(f"STDDEV_POP({expr})")
+        agg_row = self.conn.execute(
+            f"SELECT {', '.join(agg_exprs)} FROM feature_store WHERE asset = ?",
+            [_asset_key(asset)],
+        ).fetchone()
+
+        field_stats = {}
+        for i, name in enumerate(_FEATURE_FIELDS):
+            mean_val = agg_row[i * 2]
+            std_val = agg_row[i * 2 + 1]
             field_stats[name] = {
-                "mean": 0.0 if mean is None else float(mean),
-                "std": 0.0 if std is None else float(std),
+                "mean": 0.0 if mean_val is None else float(mean_val),
+                "std": 0.0 if std_val is None else float(std_val),
             }
 
         return {

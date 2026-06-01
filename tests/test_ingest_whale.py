@@ -217,3 +217,34 @@ async def test_send_subscriptions_requests_logs_and_program_streams():
     assert len(program_subs) == len(TRACKED_MINTS)
     assert {msg["params"][0] for msg in program_subs} == {TOKEN_PROGRAM_ID}
     assert {msg["params"][1]["filters"][1]["memcmp"]["bytes"] for msg in program_subs} == TRACKED_MINTS
+
+
+@pytest.mark.asyncio
+async def test_remember_transfer_concurrent_no_duplicate():
+    """Concurrent _remember_transfer calls with the same signature must not insert duplicates."""
+    import asyncio
+
+    from kairos.ingest.whale import (
+        _RECENT_TRANSFER_KEYS,
+        _RECENT_TRANSFERS,
+        _remember_transfer,
+    )
+
+    _RECENT_TRANSFERS.clear()
+    _RECENT_TRANSFER_KEYS.clear()
+
+    transfer = {
+        "signature": "sig-race-concurrent-001",
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "from_wallet": "wallet_a",
+        "to_wallet": "wallet_b",
+        "usd_value": 5_000_000.0,
+        "direction": "inflow",
+        "slot": 123,
+        "block_time": 1700000000,
+    }
+
+    await asyncio.gather(*[_remember_transfer(dict(transfer)) for _ in range(10)])
+
+    matching = [t for t in _RECENT_TRANSFERS if t.get("signature") == "sig-race-concurrent-001"]
+    assert len(matching) == 1

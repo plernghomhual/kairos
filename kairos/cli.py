@@ -196,7 +196,7 @@ def _toast(state: _DashboardState, message: str, style: str = "warning") -> None
 
 def _record_error(state: _DashboardState, view: str, exc: BaseException) -> None:
     stamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    message = f"{stamp} [{view}] {type(exc).__name__}: {exc}"
+    message = f"{stamp} [{view}] {type(exc).__name__}: {str(exc)[:120]}"
     state.error_log.append(message)
     state.error_log[:] = state.error_log[-12:]
     _toast(state, message, "warning")
@@ -417,7 +417,7 @@ def _with_overlay(body: Any, state: _DashboardState, loading_message: str | None
 
 def _error_panel(title: str, exc: BaseException) -> Panel:
     return Panel(
-        Text(f"{type(exc).__name__}: {exc}", style=_style("warning", bold=True)),
+        Text(f"{type(exc).__name__}: {str(exc)[:120]}", style=_style("warning", bold=True)),
         title=f"[{_style('warning', bold=True)}]{title}",
         border_style=_style("warning"),
         style=_panel_bg(),

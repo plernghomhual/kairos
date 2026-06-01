@@ -42,7 +42,7 @@ def sample_feature_vector():
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def trained_ensemble():
     ensemble = SignalEnsemble()
     ensemble.fit_synthetic_fallback()
@@ -72,7 +72,7 @@ def sample_signal_event():
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def backtest_result():
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     trade = BacktestTrade(

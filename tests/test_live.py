@@ -145,8 +145,7 @@ def test_run_pipeline_trained_on_real_labels():
     # should NOT be pinned at 98–99% like with synthetic-only training
     prices = _prices(n=100, noise=500)
     event = run_pipeline(prices, fng_scores=_fng(n=100))
-    # Real training produces calibrated probabilities (not all 0.98+)
-    assert event.confidence < 0.99 or event.confidence >= 0.0  # always true, just check no crash
+    assert 0.0 <= event.confidence <= 1.0
 
 
 # ── display_signal ─────────────────────────────────────────────────────────────

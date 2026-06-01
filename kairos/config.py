@@ -1,4 +1,5 @@
 import os
+import pathlib
 
 from dotenv import load_dotenv
 
@@ -10,7 +11,7 @@ REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "kairos/0.1.0")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-DB_PATH = os.getenv("KAIROS_DB_PATH", "kairos.db")
+DB_PATH = os.getenv("KAIROS_DB_PATH", str(pathlib.Path.home() / ".kairos" / "kairos.db"))
 CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
 SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -23,13 +24,16 @@ try:
     SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
 except ValueError:
     SMTP_PORT = 587
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+# Canonical SMTP credentials — SMTP_USERNAME and EMAIL_FROM/EMAIL_TO are the
+# authoritative env vars. Legacy SMTP_USER / ALERT_EMAIL_* aliases are still
+# accepted so existing deployments do not break.
+SMTP_USERNAME: str = os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER", "")
+SMTP_USER = SMTP_USERNAME  # backward-compat alias
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "")
-ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "")
-EMAIL_TO = os.getenv("EMAIL_TO", "")
+EMAIL_FROM: str = os.getenv("EMAIL_FROM") or os.getenv("ALERT_EMAIL_FROM", "")
+EMAIL_TO: str = os.getenv("EMAIL_TO") or os.getenv("ALERT_EMAIL_TO", "")
+ALERT_EMAIL_FROM = EMAIL_FROM  # backward-compat alias
+ALERT_EMAIL_TO = EMAIL_TO  # backward-compat alias
 
 CIRCUIT_BREAKER_CONFIG: dict[str, dict] = {
     "coingecko": {"failure_threshold": 5, "recovery_timeout": 60.0},

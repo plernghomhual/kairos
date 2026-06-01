@@ -67,6 +67,14 @@ MIN_HOLD_BARS = 2  # minimum bars before any exit (prevents slippage spiral)
 _logger = logging.getLogger(__name__)
 _order_book_cache: dict[str, tuple[float, dict]] = {}
 _order_book_failure_assets: set[str] = set()
+
+
+def _reset_order_book_state() -> None:
+    """Clear module-level order-book caches between independent backtest runs."""
+    _order_book_cache.clear()
+    _order_book_failure_assets.clear()
+
+
 _BINANCE_PAIR_MAP = {
     "BTC": "BTCUSDT",
     "ETH": "ETHUSDT",
@@ -539,8 +547,17 @@ def _feature_snapshot_at(
     prices_window: np.ndarray,
     fng_window: list[int],
     t: int,
+    prefit_hmm=None,
 ) -> _FeatureSnapshot | None:
-    """Compute the feature vector using only data up to index t."""
+    """Compute the feature vector using only data up to index t.
+
+    Parameters
+    ----------
+    prefit_hmm:
+        Optional pre-fitted HMM from the training window. When provided it is
+        reused instead of fitting a new one, eliminating training/serving skew
+        caused by two independent HMM instances using different random seeds.
+    """
     pw = prices_window[: t + 1]
     fw = fng_window[: t + 1]
     if len(pw) < 10:
@@ -564,7 +581,10 @@ def _feature_snapshot_at(
     returns = np.diff(smoothed) / (smoothed[:-1] + 1e-8)
     volatility = np.abs(returns)
     regime_feats = np.column_stack([returns, volatility])
-    if len(regime_feats) >= 10:
+    if prefit_hmm is not None:
+        hmm = prefit_hmm
+        regime = predict_regime(hmm, regime_feats[-5:]) if len(regime_feats) >= 5 else "lv_up"
+    elif len(regime_feats) >= 10:
         hmm = fit_regime_model(regime_feats)
         regime = predict_regime(hmm, regime_feats[-5:])
     else:
@@ -656,9 +676,10 @@ def _generate_signal_at(
     fng_window: list[int],
     t: int,
     asset: str = "BTC",
+    prefit_hmm=None,
 ) -> SignalEvent:
     """Generate a signal using only data up to index t (no lookahead)."""
-    snapshot = _feature_snapshot_at(prices_window, fng_window, t)
+    snapshot = _feature_snapshot_at(prices_window, fng_window, t, prefit_hmm=prefit_hmm)
     return _generate_signal_from_snapshot(ensemble, snapshot, asset)
 
 
@@ -703,7 +724,10 @@ def _build_training_data_window(
     smoothed = kalman_smooth(w_prices)
     vol_proxy = np.abs(np.diff(w_prices, prepend=w_prices[0]))
     anom_features = np.column_stack([w_prices[: len(vol_proxy)], vol_proxy])
-    anomaly_flags = detect_anomalies(anom_features)
+    # Fit the anomaly detector on the first half of the training window so that
+    # the contamination threshold is not influenced by data from bars after t.
+    fit_window_end = max(10, len(anom_features) // 2)
+    anomaly_flags = detect_anomalies(anom_features, fit_features=anom_features[:fit_window_end])
     vol_z = _running_vol_z(w_prices)
 
     returns = np.diff(smoothed) / (smoothed[:-1] + 1e-8)
@@ -724,7 +748,7 @@ def _build_training_data_window(
         if not np.isfinite(w_prices[t]) or not np.isfinite(w_prices[t + 2]):
             invalid_count += 1
             continue
-        slope = float(np.polyfit(range(10), smoothed[t - 10 : t], 1)[0])
+        slope = float(np.polyfit(range(10), smoothed[t - 9 : t + 1], 1)[0])
         vz = float(vol_z[t])
         anom = float(anomaly_flags[min(t, len(anomaly_flags) - 1)])
 
@@ -778,19 +802,31 @@ def _train_ensemble(
     fng_scores: list[int],
     up_to: int,
     asset: str = "BTC",
-) -> SignalEnsemble | None:
-    """Train ensemble on data up to index up_to. Returns None if insufficient data."""
+) -> tuple[SignalEnsemble | None, object]:
+    """Train ensemble on data up to index up_to.
+
+    Returns (ensemble, hmm) where hmm is the regime model fit during training.
+    Both may be None if insufficient data.
+    """
     if up_to < MIN_TRAIN_WINDOW:
-        return None
+        return None, None
     try:
         X, y, regime_labels = _build_training_data_window(prices, fng_scores, up_to)
         if len(set(y.tolist())) < 2:
-            return None
+            return None, None
         ensemble = SignalEnsemble()
         ensemble.fit_raw(X, y, regime_labels, candle_count=up_to)
-        return ensemble
+        # Extract the HMM that was used during training so signal generation can
+        # reuse the same instance, eliminating training/serving regime skew.
+        w_prices = prices[: up_to + 1]
+        smoothed = kalman_smooth(w_prices)
+        returns = np.diff(smoothed) / (smoothed[:-1] + 1e-8)
+        volatility = np.abs(returns)
+        regime_feats = np.column_stack([returns, volatility])
+        hmm = fit_regime_model(regime_feats) if len(regime_feats) >= 10 else None
+        return ensemble, hmm
     except (ValueError, IndexError):
-        return None
+        return None, None
 
 
 def _backtest_feature_metadata(
@@ -927,6 +963,7 @@ def run_backtest(
 
             fng_scores = list(_FB)
 
+    _reset_order_book_state()
     arr = np.array(prices, dtype=float)
     n = len(arr)
     if n == 0 or not np.isfinite(arr).any():
@@ -963,6 +1000,7 @@ def run_backtest(
     low_watermark: float = float("inf")  # lowest price since short entry
 
     ensemble: SignalEnsemble | None = None
+    current_hmm = None
     last_train_idx = 0
     conflict_days = 0
     total_trading_days = 0
@@ -993,9 +1031,10 @@ def run_backtest(
             or (hasattr(ensemble, "_candle_count") and t - ensemble._candle_count > 50)
         )
         if should_retrain:
-            new_ensemble = _train_ensemble(arr, fng_scores, t, asset=asset)
+            new_ensemble, new_hmm = _train_ensemble(arr, fng_scores, t, asset=asset)
             if new_ensemble is not None:
                 ensemble = new_ensemble
+                current_hmm = new_hmm
                 last_train_idx = t
 
         if ensemble is None:
@@ -1004,7 +1043,7 @@ def run_backtest(
             confidence_series.append(0.0)
             continue
 
-        snapshot = _feature_snapshot_at(arr, fng_scores, t)
+        snapshot = _feature_snapshot_at(arr, fng_scores, t, prefit_hmm=current_hmm)
         signal = _generate_signal_from_snapshot(ensemble, snapshot, asset=asset)
         if snapshot is not None:
             feature_snapshots.append((ts, t + 1, snapshot.feature_vector, signal))
@@ -1119,6 +1158,7 @@ def run_backtest(
                 direction=exit_direction,
             )
             exit_price = arr[t] * (1 - exit_slippage if position > 0 else 1 + exit_slippage)
+            capital -= abs(position) * capital * exit_slippage
             entry_trade.exit_idx = t
             entry_trade.exit_time = ts
             entry_trade.exit_price = exit_price
@@ -1147,6 +1187,7 @@ def run_backtest(
                 direction=entry_direction,
             )
             entry_price = arr[t] * (1 + entry_slippage if effective_new_position > 0 else 1 - entry_slippage)
+            capital -= abs(effective_new_position) * capital * entry_slippage
             # Initialise ATR trailing stop for new trade
             if effective_new_position > 0:
                 initial_stop = entry_price - ATR_MULTIPLIER_LONG * atr_val
@@ -1196,6 +1237,7 @@ def run_backtest(
             direction=final_direction,
         )
         exit_price = arr[exit_idx] * (1 - final_slip if position > 0 else 1 + final_slip)
+        capital -= abs(position) * capital * final_slip
         entry_trade.exit_idx = exit_idx
         entry_trade.exit_time = base_ts + timedelta(days=exit_idx)
         entry_trade.exit_price = exit_price
@@ -1327,6 +1369,7 @@ def run_multi_asset_backtest(
     confidence_series: list[float] = []
 
     ensembles: dict[str, SignalEnsemble | None] = {asset: None for asset in asset_list}
+    hmms: dict[str, object] = {asset: None for asset in asset_list}
     last_train_idx = {asset: 0 for asset in asset_list}
     vol_z_arrs = {asset: _running_vol_z(price_arrs[asset]) for asset in asset_list}
     slopes_c: dict[str, np.ndarray | None] = {asset: None for asset in asset_list}
@@ -1370,9 +1413,10 @@ def run_multi_asset_backtest(
                 )
             )
             if should_retrain:
-                new_ensemble = _train_ensemble(arr, fng_scores, t, asset=asset)
+                new_ensemble, new_hmm = _train_ensemble(arr, fng_scores, t, asset=asset)
                 if new_ensemble is not None:
                     ensembles[asset] = new_ensemble
+                    hmms[asset] = new_hmm
                     last_train_idx[asset] = t
 
             if ensembles[asset] is None:
@@ -1388,7 +1432,7 @@ def run_multi_asset_backtest(
                 capitulation_by_asset[asset] = False
                 continue
 
-            signal = _generate_signal_at(ensembles[asset], arr, fng_scores, t, asset=asset)  # type: ignore[arg-type]
+            signal = _generate_signal_at(ensembles[asset], arr, fng_scores, t, asset=asset, prefit_hmm=hmms.get(asset))  # type: ignore[arg-type]
             signal_by_asset[asset] = signal
             confidence_values.append(signal.confidence)
             total_trading_days += 1
@@ -1559,7 +1603,8 @@ def run_multi_asset_backtest(
             entry_trade.cumulative_capital = round(capital, 2)
 
     equity_arr = np.asarray(equity_curve, dtype=float)
-    daily_returns = np.diff(equity_arr) / equity_arr[:-1]
+    safe_equity = np.where(equity_arr[:-1] == 0, 1e-8, equity_arr[:-1])
+    daily_returns = np.diff(equity_arr) / safe_equity
     total_return = (capital / initial_capital) - 1
     years = max((min_n - MIN_TRAIN_WINDOW) / 365.0, 1 / 365.0)
     annualized_return = (1 + total_return) ** (1 / years) - 1

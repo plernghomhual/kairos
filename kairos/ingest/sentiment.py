@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from time import struct_time
@@ -13,6 +14,8 @@ import httpx
 
 from kairos.config import CRYPTOPANIC_API_KEY, DB_PATH
 from kairos.db import create_schema, get_connection
+
+_LOG = logging.getLogger(__name__)
 
 CRYPTOPANIC_URL = "https://cryptopanic.com/api/v1/posts/"
 FNG_URL = "https://api.alternative.me/fng/"
@@ -96,7 +99,8 @@ async def _load_or_fetch_cryptopanic(
 
     try:
         result = await _fetch_cryptopanic_sentiment(asset, api_key)
-    except Exception:
+    except Exception as exc:
+        _LOG.warning("CryptoPanic fetch failed for %s: %s", asset, exc)
         return _unavailable_source()
 
     if result.get("raw"):
@@ -114,7 +118,8 @@ async def _load_or_fetch_developer(
 
     try:
         result = await _fetch_developer_attention(asset)
-    except Exception:
+    except Exception as exc:
+        _LOG.warning("Developer RSS fetch failed for %s: %s", asset, exc)
         return _unavailable_source()
 
     if result["available"]:
@@ -150,7 +155,8 @@ async def _fetch_developer_attention(asset: str) -> dict:
             try:
                 response = await client.get(feed_url)
                 response.raise_for_status()
-            except Exception:
+            except Exception as exc:
+                _LOG.debug("Developer RSS feed %s failed: %s", feed_url, exc)
                 continue
 
             parsed = feedparser.parse(response.content)
@@ -172,7 +178,8 @@ async def _fetch_developer_attention(asset: str) -> dict:
 async def _safe_fetch_fng_score() -> int | None:
     try:
         return await _fetch_fng_score()
-    except Exception:
+    except Exception as exc:
+        _LOG.debug("FNG score fetch failed: %s", exc)
         return None
 
 

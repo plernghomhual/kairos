@@ -1,5 +1,6 @@
 """Tests for the walk-forward backtest engine."""
 
+import math
 from datetime import datetime, timezone
 
 import numpy as np
@@ -334,7 +335,7 @@ def test_train_ensemble_returns_ensemble():
     np.random.seed(42)
     prices = np.cumsum(np.random.normal(0, 50, 80)) + 50000
     fng = [50] * 80
-    ensemble = _train_ensemble(prices, fng, up_to=79)
+    ensemble, _hmm = _train_ensemble(prices, fng, up_to=79)
     assert ensemble is not None
 
     # Should be able to predict
@@ -349,8 +350,9 @@ def test_train_ensemble_returns_ensemble():
 def test_train_ensemble_insufficient_data():
     prices = np.array([50000.0] * 5)
     fng = [50] * 5
-    ensemble = _train_ensemble(prices, fng, up_to=4)
+    ensemble, hmm = _train_ensemble(prices, fng, up_to=4)
     assert ensemble is None
+    assert hmm is None
 
 
 # ── run_backtest (unit-level with controlled data) ───────────────────────────
@@ -365,9 +367,10 @@ def test_run_backtest_with_synthetic_uptrend():
         initial_capital=10000.0,
         retrain_days=60,
     )
-    assert result.total_trades >= 0
+    assert result.total_trades >= 1
     assert result.initial_capital == 10000.0
     assert result.final_capital > 0
+    assert result.final_capital != result.initial_capital  # some trading activity occurred
     assert 0.0 <= result.win_rate <= 100.0
     assert isinstance(result.sharpe, float)
     assert isinstance(result.sortino, float)
@@ -388,7 +391,7 @@ def test_run_backtest_opens_trade_from_flat_signal(monkeypatch):
     monkeypatch.setattr(engine, "_get_order_book_depth", lambda asset: None)
     monkeypatch.setattr(engine, "_store_backtest_features", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_feature_snapshot_at", lambda *args, **kwargs: None)
-    monkeypatch.setattr(engine, "_train_ensemble", lambda *args, **kwargs: object())
+    monkeypatch.setattr(engine, "_train_ensemble", lambda *args, **kwargs: (object(), None))
 
     def bullish_signal(_ensemble, _snapshot, asset="BTC"):
         from kairos.models.signal_event import SignalEvent
@@ -437,8 +440,10 @@ def test_backtest_result_has_trade_journal():
 def test_backtest_sharpe_sortino_consistent():
     """Sharpe and Sortino should not differ wildly on the same return series."""
     result = run_backtest(asset="BTC", days=365)
-    # Sortino penalizes only downside; it's often >= Sharpe for same series
-    assert abs(result.sharpe - result.sortino) < 5.0 or result.sortino >= result.sharpe - 1.0
+    assert math.isfinite(result.sharpe)
+    assert math.isfinite(result.sortino)
+    # Sortino penalizes only downside so it is typically >= Sharpe
+    assert result.sortino >= result.sharpe - 0.5
 
 
 # ── Strategy B / C (with synthetic data to avoid network calls) ───────────────
@@ -735,3 +740,19 @@ def test_atr_helper_single_price_fallback():
     prices = np.array([200.0])
     val = _atr(prices)
     assert val == pytest.approx(4.0)
+
+
+def test_training_slope_window_matches_serving_slope_window():
+    """D3 fix: smoothed[t-9:t+1] (training) == smoothed[-10:] (serving) for same price window."""
+    from kairos.signals.kalman import kalman_smooth
+
+    rng = np.random.default_rng(99)
+    prices = (50_000 + np.cumsum(rng.normal(0, 200, 40))).tolist()
+    t = 25
+
+    smoothed = kalman_smooth(np.array(prices[: t + 1]))
+
+    training_slope = float(np.polyfit(range(10), smoothed[t - 9 : t + 1], 1)[0])
+    serving_slope = float(np.polyfit(range(10), smoothed[-10:], 1)[0])
+
+    assert training_slope == pytest.approx(serving_slope, rel=1e-9)

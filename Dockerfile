@@ -11,8 +11,7 @@ COPY pyproject.toml ./
 COPY kairos/ ./kairos/
 
 RUN python -m pip install --prefix=/install --no-cache-dir --no-compile . \
-    && find /install -type d \( -name __pycache__ -o -name tests -o -name test \) -prune -exec rm -rf '{}' + \
-    && find /install -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+    && find /install -type d \( -name __pycache__ -o -name tests -o -name test \) -prune -exec rm -rf '{}' +
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
 

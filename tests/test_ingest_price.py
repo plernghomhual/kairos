@@ -35,3 +35,27 @@ async def test_fetch_and_store_ohlcv(tmp_path):
     assert len(rows) == 2
     assert rows[0][5] in (29000.0, 31000.0)  # close price
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_missing_prices_key_raises():
+    """CoinGecko response missing 'prices'/'total_volumes' must raise ValueError."""
+    import duckdb as _duckdb
+
+    from kairos.db import create_schema as _cs
+
+    conn = _duckdb.connect(":memory:")
+    _cs(conn)
+
+    with patch("kairos.ingest.price.httpx.AsyncClient") as mock_client_cls:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"market_caps": []}
+        mock_response.raise_for_status = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value = mock_client
+
+        with pytest.raises(ValueError, match="missing"):
+            await fetch_and_store_ohlcv("bitcoin", "BTC", conn, days=2)

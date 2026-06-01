@@ -204,7 +204,9 @@ def _fv(bullish: bool = True) -> FeatureVector:
 @pytest.fixture(scope="module")
 def fitted_ensemble():
     e = SignalEnsemble()
-    e.fit([_fv(True)] * 50 + [_fv(False)] * 50)
+    # prices: first 52 ascending (bullish forward returns), then 50 descending (bearish)
+    prices = list(range(100, 152)) + list(range(150, 100, -1))
+    e.fit([_fv(True)] * 50 + [_fv(False)] * 50, prices=prices)
     return e
 
 
@@ -214,8 +216,10 @@ def test_ensemble_empty_fit_raises():
 
 
 def test_ensemble_single_class_raises():
+    # Ascending prices → all forward-return labels bullish → single-class error
+    prices = list(range(100, 122))  # 22 values, lookahead=2 → 20 labels all bullish
     with pytest.raises(ValueError, match="bullish"):
-        SignalEnsemble().fit([_fv(True)] * 20)
+        SignalEnsemble().fit([_fv(True)] * 20, prices=prices)
 
 
 def test_ensemble_unfitted_predict_raises():
@@ -257,7 +261,8 @@ def test_ensemble_citations_passed_through(fitted_ensemble):
 
 def test_ensemble_save_load(tmp_path):
     e = SignalEnsemble()
-    e.fit([_fv(True)] * 50 + [_fv(False)] * 50)
+    prices = list(range(100, 152)) + list(range(150, 100, -1))
+    e.fit([_fv(True)] * 50 + [_fv(False)] * 50, prices=prices)
     p = str(tmp_path / "model.pkl")
     e.save(p)
     loaded = SignalEnsemble.load(p)
@@ -372,25 +377,91 @@ def test_api_signals_empty(api_client):
 
 def test_api_latest_empty(api_client):
     r = api_client.get("/signals/latest")
-    assert r.status_code == 200
+    assert r.status_code == 404
     assert "detail" in r.json()
 
 
-def test_api_negative_limit_clamped(api_client):
+def test_api_negative_limit_rejected(api_client):
     r = api_client.get("/signals?limit=-1")
-    assert r.status_code == 200
+    assert r.status_code == 422
 
 
-def test_api_zero_limit_clamped(api_client):
+def test_api_zero_limit_rejected(api_client):
     r = api_client.get("/signals?limit=0")
-    assert r.status_code == 200
+    assert r.status_code == 422
 
 
-def test_api_huge_limit_clamped(api_client):
+def test_api_huge_limit_rejected(api_client):
     r = api_client.get("/signals?limit=999999")
-    assert r.status_code == 200
+    assert r.status_code == 422
 
 
 def test_api_invalid_limit_type(api_client):
     r = api_client.get("/signals?limit=abc")
     assert r.status_code == 422  # FastAPI type validation
+
+
+# ── API auth tests ────────────────────────────────────────────────────────────
+
+_TEST_API_KEY = "test-secret-key-12345"
+
+
+@pytest.fixture(scope="module")
+def authed_api_client(tmp_path_factory, monkeypatch_module):
+    db = str(tmp_path_factory.mktemp("db_auth") / "auth.db")
+    import duckdb
+
+    from kairos.db import create_schema
+
+    conn = duckdb.connect(db)
+    create_schema(conn)
+    conn.close()
+    monkeypatch_module.setenv("KAIROS_API_KEY", _TEST_API_KEY)
+    app = create_app(db_path=db)
+    return TestClient(app)
+
+
+@pytest.fixture(scope="module")
+def monkeypatch_module():
+    """Module-scoped monkeypatch for env vars."""
+    import os
+
+    old = os.environ.copy()
+    yield pytest.MonkeyPatch()
+    for k in list(os.environ):
+        if k not in old:
+            del os.environ[k]
+        else:
+            os.environ[k] = old[k]
+
+
+def test_auth_health_no_key_required(authed_api_client):
+    """/health must not require auth."""
+    r = authed_api_client.get("/health")
+    assert r.status_code == 200
+
+
+def test_auth_signals_no_key_returns_401(authed_api_client):
+    r = authed_api_client.get("/signals")
+    assert r.status_code == 401
+
+
+def test_auth_signals_wrong_key_returns_401(authed_api_client):
+    r = authed_api_client.get("/signals", headers={"X-API-Key": "wrong-key"})
+    assert r.status_code == 401
+
+
+def test_auth_signals_correct_key_returns_200(authed_api_client):
+    r = authed_api_client.get("/signals", headers={"X-API-Key": _TEST_API_KEY})
+    assert r.status_code == 200
+
+
+def test_auth_latest_no_key_returns_401(authed_api_client):
+    r = authed_api_client.get("/signals/latest")
+    assert r.status_code == 401
+
+
+def test_auth_latest_correct_key_returns_404_not_401(authed_api_client):
+    """Correct key + empty DB → 404 (not signals), not 401 (auth failure)."""
+    r = authed_api_client.get("/signals/latest", headers={"X-API-Key": _TEST_API_KEY})
+    assert r.status_code == 404

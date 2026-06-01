@@ -42,25 +42,35 @@ class CircuitBreaker:
         self._opened_at: float | None = None
         self._recovery_task: asyncio.Task | None = None
         self._recovery_probe: Callable[[], Awaitable[object] | object] | None = None
+        self._lock: asyncio.Lock | None = None  # lazily created inside a running loop
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def call(self, coro_factory, fallback=None):
         """Execute a protected async call and return fallback on failure/open state."""
-        self._transition_from_open_if_ready()
-        if self._state is CircuitBreakerState.OPEN:
-            return await self._resolve_fallback(fallback)
-
-        if self._state is CircuitBreakerState.HALF_OPEN:
-            if self._half_open_requests >= self.half_open_max_requests:
+        async with self._get_lock():
+            self._transition_from_open_if_ready()
+            if self._state is CircuitBreakerState.OPEN:
                 return await self._resolve_fallback(fallback)
-            self._half_open_requests += 1
 
+            if self._state is CircuitBreakerState.HALF_OPEN:
+                if self._half_open_requests >= self.half_open_max_requests:
+                    return await self._resolve_fallback(fallback)
+                self._half_open_requests += 1
+
+        # Execute outside the lock so we don't hold it during network I/O.
         try:
             result = await coro_factory()
         except Exception:
-            self.record_failure()
+            async with self._get_lock():
+                self.record_failure()
             return await self._resolve_fallback(fallback)
 
-        self.record_success()
+        async with self._get_lock():
+            self.record_success()
         return result
 
     def record_success(self):
@@ -191,6 +201,8 @@ class CircuitBreaker:
 
 
 def _make_breaker(name: str) -> CircuitBreaker:
+    if name not in CIRCUIT_BREAKER_CONFIG:
+        raise KeyError(f"No circuit breaker config for {name!r}. " f"Available: {sorted(CIRCUIT_BREAKER_CONFIG)}")
     config = CIRCUIT_BREAKER_CONFIG[name]
     return CircuitBreaker(
         name,

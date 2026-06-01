@@ -25,3 +25,13 @@ def test_default_connection_uses_kairos_db_path_env(tmp_path, monkeypatch):
     conn.close()
 
     assert db_path.exists()
+
+
+def test_create_schema_is_idempotent(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    conn = get_connection(db_path)
+    create_schema(conn)
+    create_schema(conn)  # second call must not raise
+    tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+    assert "signal_events" in tables
+    conn.close()
