@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
+import re
 import select
 import signal
 import subprocess
@@ -194,9 +195,25 @@ def _toast(state: _DashboardState, message: str, style: str = "warning") -> None
     state.toast = _Toast(message, _style(style, bold=True), time.monotonic() + _TOAST_SECONDS)
 
 
+_SENSITIVE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"bot[0-9A-Za-z_:;,\-]{20,}"),
+    re.compile(r"(?i)(api[_-]?key|secret|password|token)=[^&\s]{8,}"),
+    re.compile(r"Bearer\s+\S+"),
+    re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+]
+
+
+def _sanitize_message(message: str) -> str:
+    for pattern in _SENSITIVE_PATTERNS:
+        message = pattern.sub("***", message)
+    return message
+
+
 def _record_error(state: _DashboardState, view: str, exc: BaseException) -> None:
     stamp = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    message = f"{stamp} [{view}] {type(exc).__name__}: {str(exc)[:120]}"
+    raw = str(exc)[:120]
+    safe = _sanitize_message(raw)
+    message = f"{stamp} [{view}] {type(exc).__name__}: {safe}"
     state.error_log.append(message)
     state.error_log[:] = state.error_log[-12:]
     _toast(state, message, "warning")
