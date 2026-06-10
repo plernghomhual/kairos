@@ -202,7 +202,7 @@ def _direction(from_exchange: str | None, to_exchange: str | None) -> str:
         return "inflow"
     if from_exchange:
         return "outflow"
-    return "outflow"
+    return "external"
 
 
 def _parse_transaction_result(signature: str, result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -264,13 +264,14 @@ async def _remember_transfer(transfer: dict[str, Any]) -> None:
         key = _transfer_key(transfer)
         if key in _RECENT_TRANSFER_KEYS:
             return
+        if _RECENT_TRANSFERS.maxlen is not None and len(_RECENT_TRANSFERS) >= _RECENT_TRANSFERS.maxlen:
+            _RECENT_TRANSFER_KEYS.discard(_transfer_key(_RECENT_TRANSFERS[0]))
         item = dict(transfer)
         item.setdefault("detected_at", _utc_now().isoformat())
         _RECENT_TRANSFERS.append(item)
         _RECENT_TRANSFER_KEYS.add(key)
-        if len(_RECENT_TRANSFER_KEYS) > RECENT_FLOW_LIMIT * 2:
-            _RECENT_TRANSFER_KEYS.clear()
-            _RECENT_TRANSFER_KEYS.update(_transfer_key(t) for t in _RECENT_TRANSFERS)
+        if len(_RECENT_TRANSFER_KEYS) != len(_RECENT_TRANSFERS):
+            _RECENT_TRANSFER_KEYS.intersection_update(_transfer_key(t) for t in _RECENT_TRANSFERS)
 
 
 def _is_exchange_related(transfer: dict[str, Any]) -> bool:
@@ -488,7 +489,7 @@ async def _fetch_transaction_batch(
                 continue
             parsed = _parse_transaction_result(signature, result)
             for transfer in parsed:
-                _remember_transfer(transfer)
+                await _remember_transfer(transfer)
                 _persist_transfer(transfer, db_path)
             transfers.extend(parsed)
     return transfers

@@ -212,3 +212,50 @@ def test_smtp_starttls_passes_ssl_context():
     call_kwargs = mock_smtp.starttls.call_args.kwargs
     assert "context" in call_kwargs
     assert isinstance(call_kwargs["context"], ssl.SSLContext)
+
+
+@pytest.mark.asyncio
+async def test_transport_failures_log_exception_type_without_traceback(monkeypatch):
+    from kairos.notifier import Notifier, NotifierConfig
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise RuntimeError("transport includes secret-bearing URL")
+
+    warnings = []
+
+    def record_warning(message, *args, **kwargs):
+        warnings.append((message, args, kwargs))
+
+    monkeypatch.setattr("kairos.notifier.httpx.AsyncClient", lambda *args, **kwargs: FailingClient())
+    monkeypatch.setattr("kairos.notifier.logger.warning", record_warning)
+
+    notifier = Notifier(
+        NotifierConfig(
+            telegram_token="secret-token",
+            telegram_chat_id="chat-id",
+            discord_webhook_url="https://discord.example.test/webhook/secret",
+            email_smtp_host="smtp.example.test",
+            email_from="from@example.test",
+            email_to="to@example.test",
+        )
+    )
+    monkeypatch.setattr(
+        notifier,
+        "_send_email_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("smtp secret")),
+    )
+
+    assert await notifier._send_telegram("hello") is False
+    assert await notifier._send_discord("hello") is False
+    assert await notifier._send_email("subject", "body") is False
+
+    assert len(warnings) == 3
+    assert all(call[2].get("exc_info") is not True for call in warnings)
+    assert all("RuntimeError" in call[1] for call in warnings)

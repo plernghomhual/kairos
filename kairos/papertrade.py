@@ -105,10 +105,7 @@ class PaperTradingEngine:
             self.update_price(event.asset, current_price)
             return None
 
-        try:
-            self._close_position(account, current_price, event)
-        except Exception:
-            return None
+        self._close_position(account, current_price, event)
         if account.open_position is not None:
             return None
         return self._open_position(account, event, current_price, next_direction)
@@ -234,16 +231,35 @@ class PaperTradingEngine:
 
         slippage = _slippage(event.regime, direction="sell" if position.direction == "long" else "buy")
         exit_price = current_price * (1 - slippage if position.direction == "long" else 1 + slippage)
+        original = (
+            position.exit_price,
+            position.exit_time,
+            position.pnl_pct,
+            position.closed,
+            account.current_capital,
+        )
         position.exit_price = exit_price
         position.exit_time = event.triggered_at
         position.pnl_pct = _position_return(position, exit_price)
         position.closed = True
 
-        account.current_capital = max(account.current_capital * (1 + position.size * position.pnl_pct), 0.0)
+        new_capital = max(account.current_capital * (1 + position.size * position.pnl_pct), 0.0)
+        try:
+            self._persist_close(position)
+        except Exception:
+            (
+                position.exit_price,
+                position.exit_time,
+                position.pnl_pct,
+                position.closed,
+                account.current_capital,
+            ) = original
+            raise
+
+        account.current_capital = new_capital
         account.open_position = None
         account.trades.append(position)
         self._append_equity(account, account.current_capital)
-        self._persist_close(position)
         return position
 
     def _append_equity(self, account: PaperAccount, equity: float) -> None:
@@ -310,7 +326,7 @@ class PaperTradingEngine:
             """
             SELECT asset, signal_id, direction, entry_price, entry_time, size,
                    exit_price, exit_time, pnl_pct, closed,
-                   high_watermark, low_watermark
+                   signal_regime, high_watermark, low_watermark
             FROM paper_trades
             ORDER BY entry_time ASC
             """
@@ -435,6 +451,7 @@ def _position_from_row(row: tuple[Any, ...]) -> PaperPosition:
         exit_time,
         pnl_pct,
         closed,
+        signal_regime,
         high_watermark,
         low_watermark,
     ) = row
@@ -449,7 +466,7 @@ def _position_from_row(row: tuple[Any, ...]) -> PaperPosition:
         exit_time=_as_utc(exit_time) if exit_time is not None else None,
         pnl_pct=float(pnl_pct) if pnl_pct is not None else None,
         closed=bool(closed),
-        entry_regime="lv_up",
+        entry_regime=str(signal_regime or "lv_up"),
         high_watermark=float(high_watermark) if high_watermark is not None else None,
         low_watermark=float(low_watermark) if low_watermark is not None else None,
     )

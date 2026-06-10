@@ -248,3 +248,74 @@ async def test_remember_transfer_concurrent_no_duplicate():
 
     matching = [t for t in _RECENT_TRANSFERS if t.get("signature") == "sig-race-concurrent-001"]
     assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_transaction_batch_remembers_rest_transfers(monkeypatch):
+    from kairos.ingest.whale import (
+        _RECENT_TRANSFER_KEYS,
+        _RECENT_TRANSFERS,
+        _fetch_transaction_batch,
+    )
+
+    _RECENT_TRANSFERS.clear()
+    _RECENT_TRANSFER_KEYS.clear()
+    transfer = {
+        "signature": "sig-rest-remembered",
+        "mint": "USDC",
+        "from_wallet": "wallet_a",
+        "to_wallet": "wallet_b",
+        "usd_value": 250_000.0,
+        "direction": "inflow",
+        "slot": 456,
+        "block_time": "2026-06-09T00:00:00+00:00",
+    }
+
+    async def fake_get_transaction(_client, signature, _rpc_url):
+        return {"signature": signature}
+
+    monkeypatch.setattr("kairos.ingest.whale._get_transaction", fake_get_transaction)
+    monkeypatch.setattr("kairos.ingest.whale._parse_transaction_result", lambda signature, result: [dict(transfer)])
+    monkeypatch.setattr("kairos.ingest.whale._persist_transfer", lambda transfer, db_path: None)
+
+    transfers = await _fetch_transaction_batch(object(), ["sig-rest-remembered"], "https://rpc.example.test", None)
+
+    assert transfers == [transfer]
+    assert [item["signature"] for item in _RECENT_TRANSFERS] == ["sig-rest-remembered"]
+
+
+@pytest.mark.asyncio
+async def test_recent_transfer_keys_track_evicted_buffer_entries():
+    from kairos.ingest.whale import (
+        _RECENT_TRANSFER_KEYS,
+        _RECENT_TRANSFERS,
+        RECENT_FLOW_LIMIT,
+        _remember_transfer,
+        _transfer_key,
+    )
+
+    _RECENT_TRANSFERS.clear()
+    _RECENT_TRANSFER_KEYS.clear()
+
+    for idx in range(RECENT_FLOW_LIMIT + 1):
+        await _remember_transfer(
+            {
+                "signature": f"sig-{idx}",
+                "mint": "USDC",
+                "from_wallet": "wallet_a",
+                "to_wallet": "wallet_b",
+                "usd_value": 250_000.0,
+                "direction": "inflow",
+                "slot": idx,
+                "block_time": "2026-06-09T00:00:00+00:00",
+            }
+        )
+
+    assert len(_RECENT_TRANSFERS) == RECENT_FLOW_LIMIT
+    assert _RECENT_TRANSFER_KEYS == {_transfer_key(transfer) for transfer in _RECENT_TRANSFERS}
+
+
+def test_non_exchange_transfer_direction_is_external():
+    from kairos.ingest.whale import _direction
+
+    assert _direction(None, None) == "external"

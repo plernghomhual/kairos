@@ -21,10 +21,19 @@ async def fetch_and_store_news(
     if api_key:
         params["api_key"] = api_key
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        articles = resp.json().get("Data", [])[:limit]
+    _httpx_log = logging.getLogger("httpx")
+    _httpcore_log = logging.getLogger("httpcore")
+    _prev = (_httpx_log.level, _httpcore_log.level)
+    _httpx_log.setLevel(logging.ERROR)
+    _httpcore_log.setLevel(logging.ERROR)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            articles = resp.json().get("Data", [])[:limit]
+    finally:
+        _httpx_log.setLevel(_prev[0])
+        _httpcore_log.setLevel(_prev[1])
 
     rows = []
     for a in articles:
@@ -41,10 +50,11 @@ async def fetch_and_store_news(
         body = str(a.get("body") or "")[:_MAX_BODY_LEN]
         rows.append((str(a.get("id", "")), a.get("source", ""), title, body, ts))
 
-    conn.executemany(
-        """
-        INSERT OR IGNORE INTO raw_news (id, source, title, body, published)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        rows,
-    )
+    if rows:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO raw_news (id, source, title, body, published)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rows,
+        )

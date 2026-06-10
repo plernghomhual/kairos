@@ -242,6 +242,6 @@ def test_webhook_signature_missing_when_secret_set(monkeypatch):
     assert _verify_webhook_signature(b"body", None) is False
 
 
-def test_webhook_no_secret_allows_any(monkeypatch):
+def test_webhook_no_secret_rejects_unsigned_payload(monkeypatch):
     monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
-    assert _verify_webhook_signature(b"any body", None) is True
+    assert _verify_webhook_signature(b"any body", None) is False

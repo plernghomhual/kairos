@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, patch
 
 import duckdb
@@ -21,6 +22,47 @@ def _conn(tmp_path):
     conn = duckdb.connect(str(tmp_path / "sentiment.db"))
     create_schema(conn)
     return conn
+
+
+@pytest.mark.asyncio
+async def test_cryptopanic_fetch_suppresses_httpx_logs_while_api_key_is_in_query(monkeypatch):
+    from kairos.ingest.sentiment import _fetch_cryptopanic_sentiment
+
+    observed_levels: list[tuple[int, int]] = []
+    httpx_logger = logging.getLogger("httpx")
+    httpcore_logger = logging.getLogger("httpcore")
+    original_levels = (httpx_logger.level, httpcore_logger.level)
+    httpx_logger.setLevel(logging.INFO)
+    httpcore_logger.setLevel(logging.INFO)
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": []}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *args, **kwargs):
+            observed_levels.append((httpx_logger.level, httpcore_logger.level))
+            return FakeResponse()
+
+    try:
+        monkeypatch.setattr("kairos.ingest.sentiment.httpx.AsyncClient", lambda *args, **kwargs: FakeClient())
+        await _fetch_cryptopanic_sentiment("BTC", "secret-query-key")
+    finally:
+        restored_levels = (httpx_logger.level, httpcore_logger.level)
+        httpx_logger.setLevel(original_levels[0])
+        httpcore_logger.setLevel(original_levels[1])
+
+    assert observed_levels == [(logging.ERROR, logging.ERROR)]
+    assert restored_levels == (logging.INFO, logging.INFO)
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ Uses XGBoost's native binary format (not pickle) — safe to load, no code execu
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -13,18 +14,32 @@ logger = logging.getLogger(__name__)
 
 _CACHE_DIR = Path(os.getenv("KAIROS_CACHE_DIR", str(Path.home() / ".kairos")))
 # A cached model is considered stale after this many seconds regardless of candle count.
-_MAX_CACHE_AGE_SECONDS = int(os.getenv("KAIROS_MODEL_CACHE_MAX_AGE", str(24 * 3600)))
+try:
+    _MAX_CACHE_AGE_SECONDS = int(os.getenv("KAIROS_MODEL_CACHE_MAX_AGE", str(24 * 3600)))
+except ValueError:
+    logger.warning("Invalid KAIROS_MODEL_CACHE_MAX_AGE; using 86400 seconds")
+    _MAX_CACHE_AGE_SECONDS = 24 * 3600
+
+_SAFE_COMPONENT = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def _safe_component(value: str, default: str = "unknown") -> str:
+    cleaned = _SAFE_COMPONENT.sub("_", str(value).strip().lower())
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "_")
+    cleaned = cleaned.strip("._-")
+    return cleaned or default
 
 
 def _paths(asset: str) -> tuple[Path, Path]:
-    _CACHE_DIR.mkdir(exist_ok=True)
-    base = str(_CACHE_DIR / f"model_{asset.lower()}")
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    base = str(_CACHE_DIR / f"model_{_safe_component(asset)}")
     return Path(base + ".ubj"), Path(base + ".meta.json")
 
 
 def _regime_path(asset: str, regime: str) -> Path:
-    _CACHE_DIR.mkdir(exist_ok=True)
-    return _CACHE_DIR / f"model_{asset.lower()}_{regime}.ubj"
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _CACHE_DIR / f"model_{_safe_component(asset)}_{_safe_component(regime, default='regime')}.ubj"
 
 
 def load_model(asset: str, n_candles: int):

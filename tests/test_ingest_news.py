@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import duckdb
@@ -81,3 +82,39 @@ async def test_articles_with_missing_fields_are_skipped(tmp_path):
     assert len(rows) == 1
     assert rows[0][2] == "Good article"
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_fetch_news_suppresses_httpx_logs_while_api_key_is_in_query(tmp_path):
+    db_path = str(tmp_path / "test.db")
+    conn = duckdb.connect(db_path)
+    create_schema(conn)
+    observed_levels: list[int] = []
+    httpx_logger = logging.getLogger("httpx")
+    original_level = httpx_logger.level
+    httpx_logger.setLevel(logging.INFO)
+
+    try:
+        with patch("kairos.ingest.news.httpx.AsyncClient") as mock_client_cls:
+            mock_response = MagicMock()
+            mock_response.json.return_value = MOCK_NEWS_RESPONSE
+            mock_response.raise_for_status = MagicMock()
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+
+            async def record_get(*args, **kwargs):
+                observed_levels.append(httpx_logger.level)
+                return mock_response
+
+            mock_client.get = AsyncMock(side_effect=record_get)
+            mock_client_cls.return_value = mock_client
+
+            await fetch_and_store_news(conn, api_key="secret-query-key")
+    finally:
+        restored_level = httpx_logger.level
+        httpx_logger.setLevel(original_level)
+        conn.close()
+
+    assert observed_levels == [logging.ERROR]
+    assert restored_level == logging.INFO

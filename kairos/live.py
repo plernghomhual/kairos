@@ -384,14 +384,19 @@ def run_pipeline(
                     ensemble.fit_raw(X, y)
                 else:
                     ensemble.fit_synthetic_fallback()
-            except Exception:
+            except Exception as exc:
+                _logger.warning(
+                    "Training data build failed for %s; using synthetic fallback: %s",
+                    asset,
+                    type(exc).__name__,
+                )
                 ensemble.fit_synthetic_fallback()
         else:
             ensemble.fit_synthetic_fallback()
         try:
             save_model(ensemble, asset, len(prices))
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning("Model cache save failed for %s: %s", asset, type(exc).__name__)
 
     return ensemble.predict(asset, fv, citations=causal["citations"], regime=regime)
 

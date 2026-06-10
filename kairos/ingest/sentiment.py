@@ -136,10 +136,19 @@ async def _fetch_cryptopanic_sentiment(asset: str, api_key: str) -> dict:
         "currencies": asset,
         "public": "true",
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(CRYPTOPANIC_URL, params=params)
-        response.raise_for_status()
-        raw = response.json()
+    _httpx_log = logging.getLogger("httpx")
+    _httpcore_log = logging.getLogger("httpcore")
+    _prev = (_httpx_log.level, _httpcore_log.level)
+    _httpx_log.setLevel(logging.ERROR)
+    _httpcore_log.setLevel(logging.ERROR)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(CRYPTOPANIC_URL, params=params)
+            response.raise_for_status()
+            raw = response.json()
+    finally:
+        _httpx_log.setLevel(_prev[0])
+        _httpcore_log.setLevel(_prev[1])
 
     return _summarize_cryptopanic(raw, asset)
 

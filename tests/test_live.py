@@ -1,5 +1,6 @@
 """Tests for live pipeline — HTTP mocked, no real network calls."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -146,6 +147,27 @@ def test_run_pipeline_trained_on_real_labels():
     prices = _prices(n=100, noise=500)
     event = run_pipeline(prices, fng_scores=_fng(n=100))
     assert 0.0 <= event.confidence <= 1.0
+
+
+def test_run_pipeline_logs_training_and_cache_fallbacks(monkeypatch, caplog):
+    import kairos.live as live
+
+    def fail_training(*args, **kwargs):
+        raise RuntimeError("training exploded")
+
+    def fail_save(*args, **kwargs):
+        raise RuntimeError("cache write failed")
+
+    monkeypatch.setattr(live, "load_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(live, "_build_training_data", fail_training)
+    monkeypatch.setattr(live, "save_model", fail_save)
+
+    with caplog.at_level(logging.WARNING, logger="kairos.live"):
+        event = live.run_pipeline(_prices(n=80), fng_scores=_fng(n=80))
+
+    assert isinstance(event, SignalEvent)
+    assert "Training data build failed for BTC; using synthetic fallback: RuntimeError" in caplog.text
+    assert "Model cache save failed for BTC: RuntimeError" in caplog.text
 
 
 # ── display_signal ─────────────────────────────────────────────────────────────

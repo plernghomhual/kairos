@@ -186,8 +186,8 @@ class Notifier:
                 _httpx_log.setLevel(_prev[0])
                 _httpcore_log.setLevel(_prev[1])
             return True
-        except Exception:
-            logger.warning("Telegram notification failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Telegram notification failed: %s", type(exc).__name__)
             return False
 
     async def _send_discord(self, message: str, event: SignalEvent | None = None, ctx: dict | None = None) -> bool:
@@ -210,8 +210,8 @@ class Notifier:
                 resp = await client.post(f"{self._config.discord_webhook_url}?wait=true", json=payload)
                 resp.raise_for_status()
             return True
-        except Exception:
-            logger.warning("Discord notification failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Discord notification failed: %s", type(exc).__name__)
             return False
 
     async def _send_email(self, subject: str, body: str) -> bool:
@@ -229,8 +229,8 @@ class Notifier:
         try:
             await asyncio.to_thread(self._send_email_sync, subject, body)
             return True
-        except Exception:
-            logger.warning("Email notification failed", exc_info=True)
+        except Exception as exc:
+            logger.warning("Email notification failed: %s", type(exc).__name__)
             return False
 
     def _send_email_sync(self, subject: str, body: str) -> None:

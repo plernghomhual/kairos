@@ -1,5 +1,7 @@
 """Tests for kairos.model_cache — XGBoost native-format disk persistence."""
 
+import importlib
+
 import kairos.model_cache as mc
 from kairos.signals.ensemble import FeatureVector, SignalEnsemble
 
@@ -51,3 +53,29 @@ def test_corrupt_meta_returns_none(tmp_path, monkeypatch):
     _, meta = mc._paths("BTC")
     meta.write_text("not valid json {{{{")
     assert mc.load_model("BTC", 100) is None  # corrupt meta → safe fallback
+
+
+def test_invalid_cache_age_env_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("KAIROS_MODEL_CACHE_MAX_AGE", "not-an-int")
+
+    reloaded = importlib.reload(mc)
+
+    assert reloaded._MAX_CACHE_AGE_SECONDS == 24 * 3600
+    monkeypatch.delenv("KAIROS_MODEL_CACHE_MAX_AGE", raising=False)
+    importlib.reload(mc)
+
+
+def test_cache_paths_cannot_escape_cache_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(mc, "_CACHE_DIR", tmp_path)
+
+    model_path, meta_path = mc._paths("../../BTC/../evil")
+    regime_path = mc._regime_path("BTC", "../../hv_down")
+    root = tmp_path.resolve()
+
+    assert model_path.resolve().is_relative_to(root)
+    assert meta_path.resolve().is_relative_to(root)
+    assert regime_path.resolve().is_relative_to(root)
+    assert ".." not in model_path.name
+    assert "/" not in model_path.name
+    assert ".." not in regime_path.name
+    assert "/" not in regime_path.name

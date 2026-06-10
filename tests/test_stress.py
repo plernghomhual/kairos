@@ -350,7 +350,7 @@ def test_backtest_length_mismatch_raises():
 
 
 @pytest.fixture(scope="module")
-def api_client(tmp_path_factory):
+def api_client(tmp_path_factory, monkeypatch_module):
     db = str(tmp_path_factory.mktemp("db") / "stress.db")
     import duckdb
 
@@ -359,6 +359,7 @@ def api_client(tmp_path_factory):
     conn = duckdb.connect(db)
     create_schema(conn)
     conn.close()
+    monkeypatch_module.setenv("KAIROS_API_KEY", _TEST_API_KEY)
     app = create_app(db_path=db)
     return TestClient(app)
 
@@ -370,13 +371,13 @@ def test_api_health(api_client):
 
 
 def test_api_signals_empty(api_client):
-    r = api_client.get("/signals")
+    r = api_client.get("/signals", headers={"X-API-Key": _TEST_API_KEY})
     assert r.status_code == 200
     assert r.json() == []
 
 
 def test_api_latest_empty(api_client):
-    r = api_client.get("/signals/latest")
+    r = api_client.get("/signals/latest", headers={"X-API-Key": _TEST_API_KEY})
     assert r.status_code == 404
     assert "detail" in r.json()
 

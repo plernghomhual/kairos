@@ -593,6 +593,39 @@ def test_multi_asset_backtest_runs(monkeypatch):
     assert sum(abs(trade.position_size) for trade in result.trades) >= 0.0
 
 
+def test_multi_asset_backtest_holds_same_regime_flip_until_final_close(monkeypatch):
+    from kairos.models.signal_event import SignalEvent
+
+    async def fake_fetch_live_data(asset: str):
+        prices = [100.0 + idx * 0.2 for idx in range(70)]
+        volumes = [1_000_000.0] * 70
+        return prices, prices[-1], [50] * 70, True, volumes
+
+    def same_regime_flip(_ensemble, _arr, _fng_scores, t, asset="BTC", prefit_hmm=None):
+        return SignalEvent(
+            asset=asset,
+            direction="bullish" if t == engine.MIN_TRAIN_WINDOW else "bearish",
+            confidence=0.75,
+            regime="lv_up",
+            narrative_velocity=0.0,
+            narrative_tipping_point=False,
+            mechanism="same-regime flip",
+            estimated_hours=240.0,
+            citations=[],
+        )
+
+    monkeypatch.setattr(engine, "fetch_live_data", fake_fetch_live_data)
+    monkeypatch.setattr(engine, "_get_order_book_depth", lambda asset: None)
+    monkeypatch.setattr(engine, "_train_ensemble", lambda *args, **kwargs: (object(), None))
+    monkeypatch.setattr(engine, "_generate_signal_at", same_regime_flip)
+
+    result = run_multi_asset_backtest(assets=("BTC",), days=70, initial_capital=10_000.0)
+
+    assert len(result.trades) == 1
+    assert result.trades[0].direction == "bullish"
+    assert result.trades[0].exit_idx == 69
+
+
 def test_run_backtest_zero_initial_capital_returns_result_without_exception():
     prices = _synth_prices(n=80, seed=21)
     result = run_backtest(

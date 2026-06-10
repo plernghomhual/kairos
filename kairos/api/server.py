@@ -21,7 +21,13 @@ def _get_version() -> str:
 
 
 def create_app(db_path: str = "kairos.db") -> FastAPI:
-    app = FastAPI(title="Kairos Signal Engine", version=_get_version())
+    app = FastAPI(
+        title="Kairos Signal Engine",
+        version=_get_version(),
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     # CORS — restrict to configured origins; defaults to localhost-only
     raw_origins = os.getenv("KAIROS_CORS_ORIGINS", "http://localhost,http://127.0.0.1")
@@ -50,15 +56,15 @@ def create_app(db_path: str = "kairos.db") -> FastAPI:
             _read_local.conn = duckdb.connect(db_path, read_only=True)
         return _read_local.conn
 
-    # API key auth — if KAIROS_API_KEY is set, all non-health routes require it.
-    _api_key = os.getenv("KAIROS_API_KEY", "")
+    # API key auth — all non-health routes require a configured key.
+    _api_key = os.getenv("KAIROS_API_KEY", "").strip()
     if not _api_key:
-        logger.warning(
-            "KAIROS_API_KEY is not set — API is running without authentication. " "Set this env var before deploying."
-        )
+        logger.error("KAIROS_API_KEY is not set; non-health API routes will fail closed")
 
     def _require_auth(x_api_key: str = Header(default="")) -> None:
-        if _api_key and x_api_key != _api_key:
+        if not _api_key:
+            raise HTTPException(status_code=503, detail="KAIROS_API_KEY is required")
+        if x_api_key != _api_key:
             raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
     def _fetchall(query: str, params: list | None = None):

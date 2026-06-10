@@ -1364,6 +1364,8 @@ def run_multi_asset_backtest(
     entry_trades: dict[str, BacktestTrade | None] = {asset: None for asset in asset_list}
     trades_by_asset: dict[str, list[BacktestTrade]] = {asset: [] for asset in asset_list}
     trades: list[BacktestTrade] = []
+    high_watermarks = {asset: 0.0 for asset in asset_list}
+    low_watermarks = {asset: float("inf") for asset in asset_list}
     equity_curve: list[float] = [initial_capital]
     timestamps: list[datetime] = []
     confidence_series: list[float] = []
@@ -1515,7 +1517,31 @@ def run_multi_asset_backtest(
             position = positions[asset]
             entry_trade = entry_trades[asset]
 
-            if new_position != position and entry_trade is not None:
+            current_price = float(arr[t])
+            atr_val = _atr(arr[: t + 1])
+            if entry_trade is not None and not entry_trade.closed:
+                if position > 0:
+                    high_watermarks[asset] = max(high_watermarks[asset], current_price)
+                    entry_trade.trailing_stop = high_watermarks[asset] - ATR_MULTIPLIER_LONG * atr_val
+                elif position < 0:
+                    low_watermarks[asset] = min(low_watermarks[asset], current_price)
+                    entry_trade.trailing_stop = low_watermarks[asset] + ATR_MULTIPLIER_SHORT * atr_val
+
+            signal_wants_exit = (new_position != position) and entry_trade is not None
+            should_exit = False
+            if signal_wants_exit:
+                bars_held = t - entry_trade.entry_idx
+                if bars_held >= MIN_HOLD_BARS:
+                    regime_changed = signal is not None and signal.regime != entry_trade.entry_regime
+                    if position > 0:
+                        atr_stop_hit = current_price < high_watermarks[asset] - ATR_MULTIPLIER_LONG * atr_val
+                    else:
+                        atr_stop_hit = current_price > low_watermarks[asset] + ATR_MULTIPLIER_SHORT * atr_val
+                    max_bars = int((entry_trade.estimated_hours or 72.0) / 24.0 * 2)
+                    max_hold_hit = bars_held >= max_bars
+                    should_exit = regime_changed or atr_stop_hit or max_hold_hit
+
+            if should_exit and entry_trade is not None:
                 exit_direction = "sell" if position > 0 else "buy"
                 exit_slippage = _compute_slippage(
                     signal.regime if signal is not None else entry_trade.regime,
@@ -1532,41 +1558,56 @@ def run_multi_asset_backtest(
                 entry_trade.closed = True
                 entry_trade.cumulative_capital = round(capital, 2)
 
-            if new_position != position and new_position != 0 and signal is not None:
-                entry_direction = "buy" if new_position > 0 else "sell"
+            if entry_trade is None:
+                effective_new_position = new_position
+            elif should_exit or new_position == position:
+                effective_new_position = new_position
+            else:
+                effective_new_position = position
+
+            if effective_new_position != position and effective_new_position != 0 and signal is not None:
+                entry_direction = "buy" if effective_new_position > 0 else "sell"
                 entry_slippage = _compute_slippage(
                     signal.regime,
                     float(vol_z_arrs[asset][t]),
-                    order_size_usd=abs(new_position) * capital,
+                    order_size_usd=abs(effective_new_position) * capital,
                     order_book=order_book,
                     direction=entry_direction,
                 )
-                entry_price = arr[t] * (1 + entry_slippage if new_position > 0 else 1 - entry_slippage)
+                entry_price = arr[t] * (1 + entry_slippage if effective_new_position > 0 else 1 - entry_slippage)
+                if effective_new_position > 0:
+                    initial_stop = entry_price - ATR_MULTIPLIER_LONG * atr_val
+                    high_watermarks[asset] = entry_price
+                else:
+                    initial_stop = entry_price + ATR_MULTIPLIER_SHORT * atr_val
+                    low_watermarks[asset] = entry_price
                 is_capitulation_trade = capitulation_by_asset[asset]
                 entry_trade = BacktestTrade(
                     entry_idx=t,
                     entry_time=ts,
                     entry_price=entry_price,
-                    direction="bullish" if new_position > 0 else "bearish",
+                    direction="bullish" if effective_new_position > 0 else "bearish",
                     confidence=signal.confidence,
                     regime=signal.regime,
                     mechanism=f"{asset}: "
                     + (signal.mechanism + " [CAPITULATION]" if is_capitulation_trade else signal.mechanism),
                     estimated_hours=signal.estimated_hours,
                     is_capitulation=is_capitulation_trade,
-                    position_size=abs(new_position),
+                    position_size=abs(effective_new_position),
+                    trailing_stop=initial_stop,
+                    entry_regime=signal.regime,
                 )
                 entry_trades[asset] = entry_trade
                 trades_by_asset[asset].append(entry_trade)
                 trades.append(entry_trade)
                 if is_capitulation_trade:
                     capitulation_trades_count += 1
-            elif new_position == 0:
+            elif effective_new_position == 0 and should_exit:
                 entry_trades[asset] = None
             else:
                 entry_trades[asset] = entry_trade
 
-            positions[asset] = new_position
+            positions[asset] = effective_new_position
 
         portfolio_return = 0.0
         for asset in asset_list:

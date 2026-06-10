@@ -143,6 +143,42 @@ def test_persistence_save_load(tmp_path):
     reloaded.close()
 
 
+def test_reload_preserves_open_position_entry_regime(tmp_path):
+    db_path = tmp_path / "paper.duckdb"
+    engine = PaperTradingEngine(initial_capital=10_000.0, db_path=str(db_path))
+    engine.process_signal(_event("bullish", event_id="persist-open-hv", regime="hv_down"), current_price=100.0)
+    engine.close()
+
+    reloaded = PaperTradingEngine(initial_capital=10_000.0, db_path=str(db_path))
+    account = reloaded.get_account("BTC")
+
+    assert account.open_position is not None
+    assert account.open_position.entry_regime == "hv_down"
+    reloaded.close()
+
+
+def test_failed_close_persist_does_not_corrupt_memory(monkeypatch):
+    engine = PaperTradingEngine(initial_capital=10_000.0)
+    position = engine.process_signal(_event("bullish", event_id="rollback-open", regime="lv_up"), current_price=100.0)
+    assert position is not None
+
+    def fail_persist_close(_position):
+        raise RuntimeError("database write failed")
+
+    monkeypatch.setattr(engine, "_persist_close", fail_persist_close)
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        engine.process_signal(_event("bearish", event_id="rollback-flip", regime="lv_down"), current_price=95.0)
+
+    account = engine.get_account("BTC")
+    assert account.open_position is position
+    assert account.trades == []
+    assert position.closed is False
+    assert position.exit_price is None
+    assert position.exit_time is None
+    assert position.pnl_pct is None
+
+
 def test_live_context_includes_paper_account(monkeypatch):
     from kairos import live
 

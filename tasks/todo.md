@@ -1,5 +1,21 @@
 # Kairos Engine Upgrade — Implementation Log
 
+## Active: Pre-Production Audit Fixes
+
+- [x] Security batch: webhook fails closed without `GITHUB_WEBHOOK_SECRET`, API routes fail closed without `KAIROS_API_KEY`, docs/OpenAPI disabled, notification/API-key logging avoids secret-bearing exception context, model cache paths are sanitized.
+- [x] State-integrity batch: paper-trade reload preserves `signal_regime`, close persistence errors do not corrupt memory, whale REST ingestion awaits in-memory recording and tightens flow dedup/direction behavior where covered.
+- [x] Backtest-integrity batch: training labels validated not to read beyond the walk-forward cutoff; multi-asset exits use the same min-hold/regime/ATR gates as single-asset. Slippage/Kelly findings did not reproduce as code changes under focused inspection.
+- [x] Operational-silence batch: live training fallback and model-cache save failures are logged with bounded exception details; malformed cache age env values fall back safely.
+- [x] Run focused red/green tests for each batch, then `ruff check`, `ruff format --check`, and feasible affected/full pytest verification.
+- [x] Final review: files changed, behavior changed, verification performed, remaining risks.
+
+### Pre-Production Audit Fixes Final Review
+
+- Files changed: `kairos/api/server.py`, `kairos/backtest/engine.py`, `kairos/ingest/github.py`, `kairos/ingest/news.py`, `kairos/ingest/sentiment.py`, `kairos/ingest/whale.py`, `kairos/live.py`, `kairos/model_cache.py`, `kairos/notifier.py`, `kairos/papertrade.py`, focused tests in `tests/`, and `tasks/todo.md`.
+- Behavior changed: webhooks and API signal routes fail closed when secrets are missing; docs/OpenAPI are disabled; notifier and query-param API request logging avoids secret-bearing exception context; model cache env/path handling is safer; paper-trade close persistence is rollback-safe and reloads entry regimes; whale REST transfers reach the in-memory store; multi-asset exits now honor min-hold, regime transition, ATR stop, and max-hold gates; live training/cache fallback failures are visible in logs.
+- Verification performed: focused red tests failed before fixes, then `15 passed`; affected deterministic suite `143 passed, 3 deselected`; full deterministic suite `361 passed, 3 deselected`; `ruff check kairos/ tests/` passed; `ruff format --check` passed; label-window validation printed `label_window_ok 68 rows`.
+- Remaining risks: local venv is Python 3.14.5 while CI targets 3.11/3.12. Three network-dependent CoinGecko backtest tests were deselected after confirming they fail locally with `httpx.ConnectError` in the restricted environment. Docker, dependency CVE scanning, DuckDB cross-process empirical testing, `hv_down` product semantics, and broader architecture refactors remain outside this code batch.
+
 ## Active: Docker GHCR Build Fix
 
 - [x] Confirm why GitHub Actions Docker build cannot find `kairos.db`.

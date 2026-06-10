@@ -213,6 +213,9 @@ async def fetch_code_velocity(
 
 async def start_webhook_server(host: str = "0.0.0.0", port: int = 8080) -> dict[str, Any] | None:
     """Start an async HTTP listener for GitHub webhook POST /webhook events."""
+    if not os.getenv("GITHUB_WEBHOOK_SECRET", ""):
+        _LOG.error("GITHUB_WEBHOOK_SECRET is required; webhook listener disabled and polling will be used")
+        return await fetch_code_velocity()
     try:
         server = await asyncio.start_server(_handle_webhook_client, host, port)
     except OSError as exc:
@@ -429,7 +432,7 @@ async def _handle_webhook_client(
 def _verify_webhook_signature(body: bytes, signature_header: str | None) -> bool:
     secret = os.getenv("GITHUB_WEBHOOK_SECRET", "")
     if not secret:
-        return True  # no secret configured — allow (warn at startup if desired)
+        return False
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
@@ -626,6 +629,7 @@ def _write_http_response(
     reason = {
         202: "Accepted",
         400: "Bad Request",
+        401: "Unauthorized",
         404: "Not Found",
         405: "Method Not Allowed",
         500: "Internal Server Error",
