@@ -1,10 +1,10 @@
 # Kairos Docker Deployment
 
-Kairos can run headlessly in Docker with the default one-shot CLI command:
+Kairos runs the FastAPI server by default in Docker:
 
 ```bash
 docker build -t kairos .
-docker run --rm kairos
+docker run --rm -p 8000:8000 -e KAIROS_API_KEY=change-me kairos
 ```
 
 ## Build
@@ -15,24 +15,16 @@ docker build -t kairos .
 
 The image uses a multi-stage `python:3.12.11-slim` build, installs only runtime dependencies, and runs as the non-root `appuser`. It does not bake in a local DuckDB file; runtime data lives under `/data`.
 
-## Run Headless
+## Run The API
 
 ```bash
-docker run --rm kairos
+docker run --rm -p 8000:8000 -e KAIROS_API_KEY=change-me kairos
 ```
 
 Equivalent explicit command:
 
 ```bash
-docker run --rm kairos kairos --asset BTC --no-tui
-```
-
-## Run The API
-
-The current API module exposes a FastAPI app factory. Run it with `uvicorn`:
-
-```bash
-docker run --rm -p 8000:8000 kairos \
+docker run --rm -p 8000:8000 -e KAIROS_API_KEY=change-me kairos \
   python -m uvicorn "kairos.api.server:create_app" \
   --factory --host 0.0.0.0 --port 8000
 ```
@@ -43,6 +35,12 @@ Then check:
 curl http://127.0.0.1:8000/health
 ```
 
+## Run One-Shot CLI
+
+```bash
+docker run --rm kairos kairos --asset BTC --no-tui
+```
+
 ## Mount A Custom Database
 
 Kairos reads `KAIROS_DB_PATH`, which defaults to `/data/kairos.db` in the image.
@@ -50,6 +48,8 @@ Kairos reads `KAIROS_DB_PATH`, which defaults to `/data/kairos.db` in the image.
 ```bash
 docker run --rm \
   -v kairos-data:/data \
+  -p 8000:8000 \
+  -e KAIROS_API_KEY=change-me \
   kairos
 ```
 
@@ -59,6 +59,8 @@ Use a different path if needed:
 docker run --rm \
   -v "$(pwd)/kairos-data:/runtime-data" \
   -e KAIROS_DB_PATH=/runtime-data/kairos.db \
+  -e KAIROS_API_KEY=change-me \
+  -p 8000:8000 \
   kairos
 ```
 
@@ -86,7 +88,7 @@ For a named running container:
 docker inspect --format='{{json .State.Health}}' kairos
 ```
 
-The check exits 0 when the configured DuckDB database is readable or when a local API server responds 200 on `/health`.
+The check exits 0 when the configured DuckDB database is readable and the local API server responds 200 on `/health`.
 
 ## Docker Compose
 
@@ -96,4 +98,4 @@ docker compose logs -f kairos
 docker compose down
 ```
 
-Compose mounts the `kairos-data` named volume to `/data` and passes through `FRED_API_KEY`, `GITHUB_TOKEN`, and `SOLANA_RPC_URL` from the host environment.
+Compose mounts the `kairos-data` named volume to `/data`, exposes the API on `8000`, and passes through the supported provider and alerting environment variables from the host environment.

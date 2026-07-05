@@ -64,9 +64,10 @@ class CircuitBreaker:
         # Execute outside the lock so we don't hold it during network I/O.
         try:
             result = await coro_factory()
-        except Exception:
+        except Exception as exc:
             async with self._get_lock():
                 self.record_failure()
+            logger.debug("Circuit breaker protected call failed for %s: %s", self.name, exc)
             return await self._resolve_fallback(fallback)
 
         async with self._get_lock():
@@ -169,18 +170,25 @@ class CircuitBreaker:
 
     async def _recover_when_ready(self) -> None:
         backoff = self.recovery_timeout
-        while self._state is CircuitBreakerState.OPEN:
+        while True:
+            async with self._get_lock():
+                if self._state is not CircuitBreakerState.OPEN:
+                    return
             await asyncio.sleep(backoff)
-            if self._recovery_probe is None:
-                self._half_open()
-                return
+            async with self._get_lock():
+                if self._state is not CircuitBreakerState.OPEN:
+                    return
+                if self._recovery_probe is None:
+                    self._half_open()
+                    return
             try:
                 result = self._recovery_probe()
                 if inspect.isawaitable(result):
                     await result
             except Exception:
-                self._last_failure_time = time.time()
-                self._opened_at = self._last_failure_time
+                async with self._get_lock():
+                    self._last_failure_time = time.time()
+                    self._opened_at = self._last_failure_time
                 backoff = min(backoff * 2, self.recovery_timeout * 16)
                 logger.warning(
                     "Circuit breaker recovery probe failed for %s",
@@ -188,7 +196,9 @@ class CircuitBreaker:
                     exc_info=True,
                 )
                 continue
-            self._half_open()
+            async with self._get_lock():
+                if self._state is CircuitBreakerState.OPEN:
+                    self._half_open()
             return
 
     def _log_transition(self, state: CircuitBreakerState) -> None:

@@ -41,4 +41,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s \
     CMD python /kairos/kairos/healthcheck.py
 
-CMD ["kairos", "--asset", "BTC", "--no-tui"]
+CMD ["python", "-m", "uvicorn", "kairos.api.server:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

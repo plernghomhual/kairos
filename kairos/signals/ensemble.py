@@ -378,6 +378,7 @@ class SignalEnsemble:
         }
         self.trained_with_params: dict[str, dict] = {}
         self.validation_auc_by_regime: dict[str, float] = {}
+        self.is_synthetic: bool = False
 
     def load_best_params(self, asset: str) -> bool:
         del asset  # Best-param files are currently shared by regime.
@@ -427,6 +428,7 @@ class SignalEnsemble:
             )
         self._trained_at = time.time()
         self._candle_count = candle_count
+        self.is_synthetic = False
 
     def fit_synthetic_fallback(self) -> None:
         for reg in REGIMES:
@@ -470,6 +472,7 @@ class SignalEnsemble:
             self.trained_with_params[reg] = _merged_model_params(params, regime=reg)
         self._trained_at = time.time()
         self._candle_count = 0
+        self.is_synthetic = True
 
     def fit(
         self,
@@ -537,7 +540,7 @@ class SignalEnsemble:
         for reg, model in self._models.items():
             model.save_model(str(base.parent / f"{base.stem}_{reg}.ubj"))
         with open(str(base) + ".meta.json", "w") as f:
-            _json.dump({"regimes": regimes}, f)
+            _json.dump({"regimes": regimes, "is_synthetic": self.is_synthetic}, f)
 
     @classmethod
     def load(cls, path: str) -> "SignalEnsemble":
@@ -554,6 +557,7 @@ class SignalEnsemble:
         with open(meta_path) as f:
             meta = _json.load(f)
         ensemble = cls()
+        ensemble.is_synthetic = bool(meta.get("is_synthetic", False))
         for reg in meta.get("regimes", []):
             reg_path = base.parent / f"{base.stem}_{reg}.ubj"
             if not reg_path.exists():
@@ -575,18 +579,25 @@ class SignalEnsemble:
         if errors:
             raise ValueError("FeatureVector validation failed: " + "; ".join(errors))
         model = self._models.get(regime) if self._fitted.get(regime, False) else None
+        actual_regime = regime
         if model is None:
             fitted = self.fitted_regimes()
             if not fitted:
                 raise RuntimeError("No sub-models fitted — call fit_raw() or fit_synthetic_fallback() first")
-            model = self._models[fitted[0]]
+            actual_regime = fitted[0]
+            logger.warning(
+                "Ensemble falling back from requested regime %s to fitted regime %s",
+                regime,
+                actual_regime,
+            )
+            model = self._models[actual_regime]
         X = fv.to_array().reshape(1, -1)
         proba = model.predict_proba(X)[0]
         bullish_prob = float(proba[1])
         direction = "bullish" if bullish_prob > 0.5 else "bearish"
         confidence = bullish_prob if direction == "bullish" else 1.0 - bullish_prob
 
-        if regime == "lv_down":
+        if actual_regime == "lv_down":
             momentum_strength = min(abs(fv.kalman_slope) * 0.005, 0.5)
             if fv.kalman_slope < 0:
                 if direction == "bearish":
@@ -596,15 +607,15 @@ class SignalEnsemble:
             elif fv.kalman_slope > 0 and direction == "bullish":
                 confidence = min(confidence + momentum_strength * 0.5, 0.95)
 
-        estimated_hours = _estimate_hours(fv, regime)
+        estimated_hours = _estimate_hours(fv, actual_regime)
         return SignalEvent(
             asset=asset,
             direction=direction,
             confidence=round(confidence, 4),
-            regime=regime,
+            regime=actual_regime,
             narrative_velocity=round(fv.narrative_velocity, 4),
             narrative_tipping_point=fv.narrative_tipping_point,
-            mechanism=f"regime_routed({regime}) → narrative({fv.narrative_velocity:.2f}) → price",
+            mechanism=f"regime_routed({actual_regime}) → narrative({fv.narrative_velocity:.2f}) → price",
             estimated_hours=round(min(estimated_hours, 168.0), 1),
             citations=citations,
         )

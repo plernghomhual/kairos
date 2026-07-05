@@ -77,10 +77,14 @@ async def _fetch_and_store_macro_inner(
                 raw_val = obs.get("value", ".")
                 if raw_val in _FRED_MISSING:
                     continue
+                obs_date = obs.get("date")
+                if obs_date is None:
+                    logger.debug("Skipping FRED observation without date for %s", series_id)
+                    continue
                 try:
-                    rows.append((series_id, obs["date"], float(raw_val)))
+                    rows.append((series_id, obs_date, float(raw_val)))
                 except (ValueError, TypeError):
-                    logger.debug("Skipping non-numeric FRED value %r for %s on %s", raw_val, series_id, obs.get("date"))
+                    logger.debug("Skipping non-numeric FRED value %r for %s on %s", raw_val, series_id, obs_date)
                     continue
 
             conn.executemany(

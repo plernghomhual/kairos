@@ -1,5 +1,37 @@
 # Kairos Engine Upgrade — Implementation Log
 
+## Active: Audit Fixes 2026-07-04
+
+- [x] Item 1: create/persist `github_events` schema and regression test.
+- [x] Item 2: make ensemble regime fallback report/adjust against the actual model used.
+- [x] Item 3: use timing-safe API key comparison and add wrong-key test.
+- [x] Item 4: add CI lint job aligned with Makefile/pyproject Ruff config.
+- [x] Item 5: verify/fix circuit-breaker half-open concurrency and recovery scheduling.
+- [x] Item 6: add PR Docker build check and publish smoke test.
+- [x] Item 7: reconcile Docker API port/CMD behavior.
+- [x] Item 8: expose alerting/provider env vars in Compose and `.env.example` if present.
+- [x] Item 9: confirmed paper-trade close persistence rollback is already handled by snapshot/restore tests.
+- [x] Item 10: surface synthetic ensemble fallback with persisted `is_synthetic`; zero-confidence neutral fallback path did not exist in current `regime.py`.
+- [x] Item 11: test real 429 retry/backoff behavior in live price fetch.
+- [x] Item 12: log silent broad-exception sites and narrow where low-risk.
+- [x] Item 13: serialize whale persistence writes; papertrade writes are guarded by live's paper-engine lock and DB retry remains in `get_connection()`.
+- [x] Item 14: isolate malformed FRED observations per row.
+- [x] Item 15: retry/log malformed price payloads and warn on zip truncation.
+- [x] Item 16: treat duplicate whale-transfer inserts as benign.
+- [x] Item 17: keep whale websocket alive after malformed frames.
+- [x] Item 18: catch whale DB refresh/metrics `RuntimeError` and return safe flow defaults.
+- [x] Item 19: suppress secret-bearing Discord webhook URL logs.
+- [x] Item 20: confirmed papertrade does not call external APIs directly; circuit breaker boundary stays in live/source fetchers.
+- [x] Run targeted red/green checks, then `make lint` and `make test` as feasible.
+- [x] Final review: files changed, behavior changed, verification performed, remaining risks.
+
+### Audit Fixes 2026-07-04 Final Review
+
+- Files changed: `.env.example`, `.github/workflows/ci.yml`, `.github/workflows/docker-publish.yml`, `Dockerfile`, `README.docker.md`, `docker-compose.yml`, `kairos/api/server.py`, `kairos/backtest/engine.py`, `kairos/circuit_breaker.py`, `kairos/db.py`, `kairos/ingest/macro.py`, `kairos/ingest/price.py`, `kairos/ingest/whale.py`, `kairos/live.py`, `kairos/notifier.py`, `kairos/signals/ensemble.py`, `kairos/signals/regime.py`, focused tests in `tests/`, and `tasks/todo.md`.
+- Behavior changed: GitHub webhook events now have durable schema; ensemble fallback reports the actual fitted regime and preserves synthetic-model metadata; API key checks use `hmac.compare_digest`; CI now runs Ruff and PR Docker builds; Docker now starts the API server by default and publish smoke-tests the image; Compose/env docs expose provider and alerting variables; ingestion paths handle malformed FRED, CoinGecko, Solana, duplicate whale, and DB-unavailable cases more gracefully; secret-bearing Discord webhook URLs get the same log suppression as Telegram; no-network backtests fall back to a deterministic synthetic trend instead of crashing.
+- Verification performed: focused red tests failed before fixes (`10 failed, 2 passed`) then passed (`12 passed`); affected suite passed `166 passed, 1 warning`; `PATH=.venv/bin:$PATH make lint` passed; workflow/Compose YAML parsed with Ruby; `PATH=.venv/bin:$PATH make test` passed `376 passed, 1 warning`; `git diff --check` passed.
+- Remaining risks: Docker CLI is not installed locally, so actual `docker build`/smoke-run validation was not possible here; CI now performs those checks. Local Python is 3.14.6 while project CI targets 3.11/3.12.
+
 ## Active: Pre-Production Audit Fixes
 
 - [x] Security batch: webhook fails closed without `GITHUB_WEBHOOK_SECRET`, API routes fail closed without `KAIROS_API_KEY`, docs/OpenAPI disabled, notification/API-key logging avoids secret-bearing exception context, model cache paths are sanitized.

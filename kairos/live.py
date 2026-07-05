@@ -96,7 +96,8 @@ async def _fetch_fng(client: httpx.AsyncClient, days: int = 365) -> tuple[list[i
         data = resp.json()["data"]
         scores = [int(d["value"]) for d in reversed(data)]  # API returns newest first
         return scores, True
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Fear & Greed fetch failed; using neutral fallback: %s", type(exc).__name__)
         return _FNG_FALLBACK, False
 
 
@@ -124,11 +125,12 @@ async def fetch_live_data(
                 _fetch_prices(client, coin_id=coin_id),
                 _fetch_fng(client),
             )
-    except Exception:
+    except Exception as exc:
         cached = _LIVE_DATA_CACHE.get(asset)
         if cached is not None:
             _logger.warning("Live fetch failed for %s; using stale cached data", asset, exc_info=True)
             return _copy_live_data(cached[1])
+        _logger.warning("Live fetch failed for %s with no stale cache: %s", asset, type(exc).__name__)
         raise
 
     result = (prices, current_price, fng_scores, fng_ok, volumes)
@@ -383,6 +385,7 @@ def run_pipeline(
                 if len(set(y.tolist())) >= 2:
                     ensemble.fit_raw(X, y)
                 else:
+                    _logger.warning("Using synthetic fallback model for %s: one-class training labels", asset)
                     ensemble.fit_synthetic_fallback()
             except Exception as exc:
                 _logger.warning(
@@ -392,6 +395,7 @@ def run_pipeline(
                 )
                 ensemble.fit_synthetic_fallback()
         else:
+            _logger.warning("Using synthetic fallback model for %s: insufficient regime history", asset)
             ensemble.fit_synthetic_fallback()
         try:
             save_model(ensemble, asset, len(prices))
@@ -418,8 +422,8 @@ def run_pipeline_with_context(
                 try:
                     _PAPER_TRADING_ENGINE.process_signal(event, current_price=prices[-1])
                     ctx["paper_account"] = _PAPER_TRADING_ENGINE.get_account(asset)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _logger.warning("Paper trading update failed for %s: %s", asset, type(exc).__name__)
     return event, ctx
 
 

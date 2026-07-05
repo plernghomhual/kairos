@@ -45,6 +45,16 @@ def test_signal_routes_fail_closed_when_api_key_missing(tmp_path, monkeypatch):
     assert response.json()["detail"] == "KAIROS_API_KEY is required"
 
 
+def test_signal_routes_reject_wrong_api_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("KAIROS_API_KEY", "test-api-key")
+    app = create_app(db_path=str(tmp_path / "test.db"))
+    client = TestClient(app)
+
+    response = client.get("/signals", headers={"X-API-Key": "test-api-kex"})
+
+    assert response.status_code == 401
+
+
 def test_docs_and_openapi_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("KAIROS_API_KEY", "test-api-key")
     app = create_app(db_path=str(tmp_path / "test.db"))

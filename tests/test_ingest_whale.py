@@ -319,3 +319,72 @@ def test_non_exchange_transfer_direction_is_external():
     from kairos.ingest.whale import _direction
 
     assert _direction(None, None) == "external"
+
+
+def test_persist_transfer_duplicate_constraint_is_benign(monkeypatch, caplog):
+    from kairos.ingest import whale
+
+    class FakeConn:
+        def execute(self, query, _params=None):
+            if query.lstrip().upper().startswith("SELECT"):
+                return self
+            raise duckdb.ConstraintException("duplicate key")
+
+        def fetchone(self):
+            return None
+
+    fake_conn = FakeConn()
+    monkeypatch.setattr(whale, "_get_persist_conn", lambda _db_path=None: fake_conn)
+    whale._persist_local.conn = fake_conn
+
+    with caplog.at_level("DEBUG", logger="kairos.ingest.whale"):
+        whale._persist_transfer(
+            {
+                "signature": "duplicate-sig",
+                "mint": "USDC",
+                "from_wallet": "wallet_a",
+                "to_wallet": "wallet_b",
+                "to_exchange": "Coinbase",
+                "usd_value": 250_000.0,
+                "direction": "inflow",
+                "slot": 1,
+                "block_time": "2026-07-04T00:00:00+00:00",
+            }
+        )
+
+    assert whale._persist_local.conn is fake_conn
+    assert "Duplicate whale transfer ignored" in caplog.text
+
+
+def test_parse_ws_message_skips_malformed_frame(caplog):
+    from kairos.ingest.whale import _parse_ws_message
+
+    with caplog.at_level("WARNING", logger="kairos.ingest.whale"):
+        assert _parse_ws_message("{bad json") is None
+
+    assert _parse_ws_message('{"method":"logsNotification"}') == {"method": "logsNotification"}
+    assert "Malformed Solana websocket frame skipped" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fetch_whale_flows_handles_db_unavailable(monkeypatch):
+    from kairos.ingest import whale
+
+    async def no_signatures(*_args, **_kwargs):
+        return []
+
+    async def no_transfers(*_args, **_kwargs):
+        return []
+
+    def raise_db_error(*_args, **_kwargs):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(whale, "refresh_exchange_wallets_from_db", raise_db_error)
+    monkeypatch.setattr(whale, "_get_signatures", no_signatures)
+    monkeypatch.setattr(whale, "_fetch_transaction_batch", no_transfers)
+    monkeypatch.setattr(whale, "get_whale_metrics", raise_db_error)
+
+    result = await whale.fetch_whale_flows(limit=1)
+
+    assert result["transfers_count"] == 0
+    assert result["net_flow_usd"] == 0.0

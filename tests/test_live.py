@@ -386,3 +386,30 @@ async def test_fetch_live_data_returns_stale_cache_on_429():
         result = await live.fetch_live_data("BTC")
 
     assert result == stale
+
+
+@pytest.mark.asyncio
+async def test_coingecko_get_retries_429_responses(monkeypatch):
+    import kairos.live as live
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(live.asyncio, "sleep", fake_sleep)
+
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.raise_for_status = MagicMock()
+
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[rate_limited, rate_limited, ok])
+
+    response = await live._coingecko_get(client, "https://example.test", {"days": "1"})
+
+    assert response is ok
+    assert sleeps == [1.0, 2.0]
+    assert client.get.await_count == 3

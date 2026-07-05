@@ -12,6 +12,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Ruff
+        run: |
+          ruff check kairos/ tests/
+          ruff format --check kairos/ tests/
+
+  docker-build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Dockerfile exists
+        run: test -f Dockerfile
+
+      - name: Build image
+        run: docker build -t kairos-ci .
+
   test:
     name: ${{ matrix.suite }} tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

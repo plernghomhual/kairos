@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 import threading
@@ -64,7 +65,7 @@ def create_app(db_path: str = "kairos.db") -> FastAPI:
     def _require_auth(x_api_key: str = Header(default="")) -> None:
         if not _api_key:
             raise HTTPException(status_code=503, detail="KAIROS_API_KEY is required")
-        if x_api_key != _api_key:
+        if not hmac.compare_digest(x_api_key, _api_key):
             raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
     def _fetchall(query: str, params: list | None = None):

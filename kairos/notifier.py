@@ -206,9 +206,18 @@ class Notifier:
         else:
             payload = {"content": message}
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(f"{self._config.discord_webhook_url}?wait=true", json=payload)
-                resp.raise_for_status()
+            _httpx_log = logging.getLogger("httpx")
+            _httpcore_log = logging.getLogger("httpcore")
+            _prev = (_httpx_log.level, _httpcore_log.level)
+            _httpx_log.setLevel(logging.ERROR)
+            _httpcore_log.setLevel(logging.ERROR)
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(f"{self._config.discord_webhook_url}?wait=true", json=payload)
+                    resp.raise_for_status()
+            finally:
+                _httpx_log.setLevel(_prev[0])
+                _httpcore_log.setLevel(_prev[1])
             return True
         except Exception as exc:
             logger.warning("Discord notification failed: %s", type(exc).__name__)

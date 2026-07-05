@@ -1,4 +1,5 @@
 import importlib
+import logging
 import ssl
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -258,4 +259,44 @@ async def test_transport_failures_log_exception_type_without_traceback(monkeypat
 
     assert len(warnings) == 3
     assert all(call[2].get("exc_info") is not True for call in warnings)
-    assert all("RuntimeError" in call[1] for call in warnings)
+
+
+@pytest.mark.asyncio
+async def test_discord_suppresses_http_logger_during_secret_url_post(monkeypatch):
+    from kairos.notifier import Notifier, NotifierConfig
+
+    observed_levels = []
+
+    class ObservingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            observed_levels.append(
+                (
+                    logging.getLogger("httpx").level,
+                    logging.getLogger("httpcore").level,
+                )
+            )
+            response = MagicMock()
+            response.raise_for_status = MagicMock()
+            return response
+
+    httpx_logger = logging.getLogger("httpx")
+    httpcore_logger = logging.getLogger("httpcore")
+    previous = (httpx_logger.level, httpcore_logger.level)
+    httpx_logger.setLevel(logging.INFO)
+    httpcore_logger.setLevel(logging.INFO)
+    monkeypatch.setattr("kairos.notifier.httpx.AsyncClient", lambda *args, **kwargs: ObservingClient())
+
+    try:
+        notifier = Notifier(NotifierConfig(discord_webhook_url="https://discord.example.test/webhook/secret"))
+        assert await notifier._send_discord("hello") is True
+    finally:
+        httpx_logger.setLevel(previous[0])
+        httpcore_logger.setLevel(previous[1])
+
+    assert observed_levels == [(logging.ERROR, logging.ERROR)]

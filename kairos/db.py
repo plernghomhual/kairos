@@ -144,6 +144,15 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS github_events (
+            event_type  VARCHAR,
+            repo        VARCHAR,
+            payload     JSON,
+            received_at TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_github_events_repo_ts ON github_events (repo, received_at DESC)")
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS exchange_wallets (
             address VARCHAR PRIMARY KEY,
             exchange VARCHAR,

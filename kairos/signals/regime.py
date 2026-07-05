@@ -120,8 +120,8 @@ def optimize_regime_model(features: np.ndarray) -> GaussianHMM:
             model = _fit_with_params(matrix, cached_params)
             if not _is_dominated_fit(_predict_label_sequence(model, matrix)):
                 return model
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("Cached HMM params failed; retraining: %s", exc)
 
     params = _select_best_params(matrix)
     model = _fit_with_params(matrix, params)
@@ -298,7 +298,8 @@ def _fit_candidate_chain(
             if result is not None:
                 results.append(result)
             previous_target = n_iter
-        except Exception:
+        except Exception as exc:
+            _logger.debug("HMM candidate fit failed: %s", exc)
             break
 
     return results
@@ -330,7 +331,8 @@ def _evaluate_candidate(
             "label_sequence": _predict_label_sequence(model, features),
             "transmat_penalty": _transition_matrix_penalty(model.transmat_),
         }
-    except Exception:
+    except Exception as exc:
+        _logger.debug("HMM candidate evaluation failed: %s", exc)
         return None
 
 
@@ -441,7 +443,8 @@ def _build_hungarian_label_map(model: GaussianHMM) -> dict[int, str]:
                 nearest_label_idx = int(np.argmin(cost[state_idx]))
                 label_map[state_idx] = labels[nearest_label_idx]
         return label_map
-    except Exception:
+    except Exception as exc:
+        _logger.debug("HMM label-map assignment failed; using volatility sort: %s", exc)
         return _volatility_sort_label_map(model)
 
 
@@ -514,7 +517,8 @@ def _load_cached_params(features: np.ndarray) -> dict[str, Any] | None:
 
     try:
         cached = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        _logger.warning("Ignoring unreadable HMM parameter cache %s: %s", path, exc)
         return None
 
     if time.time() - float(cached.get("optimized_at", 0.0)) > CACHE_MAX_AGE_SECONDS:

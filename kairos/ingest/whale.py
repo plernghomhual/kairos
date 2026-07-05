@@ -15,6 +15,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import duckdb
 import httpx
 
 from kairos.config import DB_PATH, SOLANA_RPC_URL
@@ -41,6 +42,7 @@ _RECENT_TRANSFERS: deque[dict[str, Any]] = deque(maxlen=RECENT_FLOW_LIMIT)
 _RECENT_TRANSFER_KEYS: set[tuple[Any, ...]] = set()
 _SEEN_SIGNATURES: set[str] = set()
 _STREAM_TASK: asyncio.Task[None] | None = None
+_PERSIST_LOCK = threading.Lock()
 
 # Lazy async locks — created on first use to avoid "no event loop" at import time.
 _TRANSFERS_LOCK: asyncio.Lock | None = None
@@ -293,30 +295,33 @@ def _persist_transfer(transfer: dict[str, Any], db_path: str | None = None) -> N
         return
 
     try:
-        conn = _get_persist_conn(db_path)
-        if conn.execute(
-            "SELECT 1 FROM whale_transfers WHERE signature = ?",
-            [transfer.get("signature")],
-        ).fetchone():
-            return
-        conn.execute(
-            """
-            INSERT INTO whale_transfers(
-                signature, mint, from_wallet, to_wallet, usd_value,
-                direction, slot, block_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                transfer.get("signature"),
-                transfer.get("mint"),
-                transfer.get("from_wallet"),
-                transfer.get("to_wallet"),
-                float(transfer.get("usd_value", 0.0)),
-                transfer.get("direction"),
-                transfer.get("slot"),
-                transfer.get("block_time"),
-            ],
-        )
+        with _PERSIST_LOCK:
+            conn = _get_persist_conn(db_path)
+            if conn.execute(
+                "SELECT 1 FROM whale_transfers WHERE signature = ?",
+                [transfer.get("signature")],
+            ).fetchone():
+                return
+            conn.execute(
+                """
+                INSERT INTO whale_transfers(
+                    signature, mint, from_wallet, to_wallet, usd_value,
+                    direction, slot, block_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    transfer.get("signature"),
+                    transfer.get("mint"),
+                    transfer.get("from_wallet"),
+                    transfer.get("to_wallet"),
+                    float(transfer.get("usd_value", 0.0)),
+                    transfer.get("direction"),
+                    transfer.get("slot"),
+                    transfer.get("block_time"),
+                ],
+            )
+    except duckdb.ConstraintException:
+        logger.debug("Duplicate whale transfer ignored: %s", transfer.get("signature"))
     except Exception as exc:
         logger.warning("Failed to persist whale transfer: %s", exc)
         _persist_local.conn = None  # reset so next call gets a fresh connection
@@ -544,7 +549,10 @@ def _sanitize_whale_flows_result(result: dict[str, Any]) -> dict[str, Any]:
 
 async def fetch_whale_flows(limit: int = 30) -> dict[str, Any]:
     """Fetch recent large stablecoin transfers through the REST fallback path."""
-    refresh_exchange_wallets_from_db()
+    try:
+        refresh_exchange_wallets_from_db()
+    except RuntimeError as exc:
+        logger.warning("Exchange wallet refresh skipped: %s", exc)
     async with httpx.AsyncClient(timeout=10.0) as client:
         signature_lists = await asyncio.gather(
             *[_get_signatures(client, mint, limit=limit, rpc_url=SOLANA_RPC_URL) for mint in TRACKED_MINTS],
@@ -569,7 +577,11 @@ async def fetch_whale_flows(limit: int = 30) -> dict[str, Any]:
         )
 
     transfers.sort(key=lambda t: t.get("usd_value", 0.0), reverse=True)
-    metrics = get_whale_metrics()
+    try:
+        metrics = get_whale_metrics()
+    except RuntimeError as exc:
+        logger.warning("Whale DB metrics unavailable: %s", exc)
+        metrics = {}
     return _sanitize_whale_flows_result(
         {
             "transfers_count": len(transfers),
@@ -624,6 +636,14 @@ async def _send_subscriptions(ws: Any) -> None:
 
 def _has_transfer_log(logs: list[str]) -> bool:
     return any("Instruction: Transfer" in log for log in logs)
+
+
+def _parse_ws_message(raw: str) -> dict[str, Any] | None:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("Malformed Solana websocket frame skipped: %s", exc)
+        return None
 
 
 async def _handle_logs_notification(
@@ -681,7 +701,9 @@ async def stream_whale_flows(
                 backoff = 1
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     async for raw in ws:
-                        message = json.loads(raw)
+                        message = _parse_ws_message(raw)
+                        if message is None:
+                            continue
                         if message.get("method") != "logsNotification":
                             continue
                         value = message.get("params", {}).get("result", {}).get("value", {})

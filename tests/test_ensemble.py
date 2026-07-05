@@ -1,4 +1,5 @@
 import json
+import logging
 
 import numpy as np
 import pytest
@@ -166,6 +167,37 @@ def test_predict_raises_if_not_fitted():
     ensemble = SignalEnsemble()
     with pytest.raises(RuntimeError, match="No sub-models fitted"):
         ensemble.predict("BTC", make_feature_vector(), citations=[])
+
+
+def test_predict_fallback_reports_actual_model_regime(caplog):
+    class DummyModel:
+        def predict_proba(self, _X):
+            return np.array([[0.7, 0.3]])
+
+    ensemble = SignalEnsemble()
+    ensemble._models["lv_up"] = DummyModel()
+    ensemble._fitted["lv_up"] = True
+    fv = make_feature_vector(False)
+    fv.kalman_slope = -100.0
+
+    with caplog.at_level(logging.WARNING, logger="kairos.signals.ensemble"):
+        event = ensemble.predict("BTC", fv, citations=[], regime="lv_down")
+
+    assert event.regime == "lv_up"
+    assert event.confidence == pytest.approx(0.7)
+    assert "falling back from requested regime lv_down to fitted regime lv_up" in caplog.text
+
+
+def test_synthetic_fallback_marker_survives_save_load(tmp_path):
+    path = tmp_path / "ensemble.ubj"
+    ensemble = SignalEnsemble()
+
+    ensemble.fit_synthetic_fallback()
+    ensemble.save(str(path))
+    loaded = SignalEnsemble.load(str(path))
+
+    assert ensemble.is_synthetic is True
+    assert loaded.is_synthetic is True
 
 
 class DummyRandomizedSearchCV:
