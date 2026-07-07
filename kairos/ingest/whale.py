@@ -74,14 +74,11 @@ def register_exchange_wallet(address: str, exchange: str) -> None:
 
 def refresh_exchange_wallets_from_db(db_path: str | None = None) -> None:
     """Load exchange wallet labels from the `exchange_wallets` table."""
-    conn = get_connection(db_path or DB_PATH)
-    try:
-        create_schema(conn)
+    with _PERSIST_LOCK:
+        conn = _get_persist_conn(db_path)
         rows = conn.execute("SELECT address, exchange FROM exchange_wallets WHERE address IS NOT NULL").fetchall()
-        for address, exchange in rows:
-            register_exchange_wallet(str(address), str(exchange))
-    finally:
-        conn.close()
+    for address, exchange in rows:
+        register_exchange_wallet(str(address), str(exchange))
 
 
 def _rpc_to_ws_url(rpc_url: str) -> str:
@@ -284,8 +281,14 @@ _persist_local = threading.local()
 
 
 def _get_persist_conn(db_path: str | None = None):
-    if not hasattr(_persist_local, "conn") or _persist_local.conn is None:
-        _persist_local.conn = get_connection(db_path or DB_PATH)
+    resolved_path = db_path or DB_PATH
+    if (
+        not hasattr(_persist_local, "conn")
+        or _persist_local.conn is None
+        or getattr(_persist_local, "path", None) != resolved_path
+    ):
+        _persist_local.conn = get_connection(resolved_path)
+        _persist_local.path = resolved_path
         create_schema(_persist_local.conn)
     return _persist_local.conn
 
@@ -342,9 +345,8 @@ def get_whale_metrics(
     now: datetime | None = None,
 ) -> dict[str, float | int]:
     """Return exchange-relative whale flow metrics from persisted transfers."""
-    conn = get_connection(db_path or DB_PATH)
-    try:
-        create_schema(conn)
+    with _PERSIST_LOCK:
+        conn = _get_persist_conn(db_path)
         current = now or _utc_now()
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
@@ -399,8 +401,6 @@ def get_whale_metrics(
             "avg_whale_size_24h": round(float(row[1] or 0.0), 2),
             "largest_flow_24h": round(float(row[2] or 0.0), 2),
         }
-    finally:
-        conn.close()
 
 
 async def get_recent_flows(minutes: int = 5) -> list[dict[str, Any]]:

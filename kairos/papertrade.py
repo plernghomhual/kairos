@@ -4,6 +4,12 @@ Tracks a mock per-asset account through forward signals without placing
 orders or touching real capital.
 """
 
+# ponytail: no CircuitBreaker here on purpose. CircuitBreaker (kairos/circuit_breaker.py)
+# exists to back off flaky *external* data sources; persistence here is a local DuckDB
+# write, and a failed write already rolls back in-memory state and re-raises
+# (see PaperTradingEngine._persist_close). Wrapping that in a breaker would just add a
+# second failure-tracking layer around a call that isn't retried or rate-limited anyway.
+
 from __future__ import annotations
 
 from dataclasses import dataclass
